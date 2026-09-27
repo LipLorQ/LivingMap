@@ -55,7 +55,7 @@ test("Stage 2: one real Intention through the actual UI, surviving a restart", a
   // 2. Season.
   await win.getByTestId("season-focus").fill("Recover and rebuild momentum");
   await win.getByTestId("season-save").click();
-  await expect(win.getByTestId("season-save")).toHaveText("Update season");
+  await expect(win.getByTestId("season-save")).toHaveText("Сохранить фокус");
 
   // 3. Good Life Conditions.
   await win.getByTestId("condition-new").fill("Sleep 8 hours");
@@ -83,30 +83,37 @@ test("Stage 2: one real Intention through the actual UI, surviving a restart", a
   await win.getByTestId("action-done-when-new").fill("Season/Intention/Stage/Action persist and survive restart");
   await win.getByTestId("action-add").click();
   await expect(win.getByTestId("action")).toHaveCount(1);
-  await expect(win.getByTestId("action-status")).toHaveText("open");
+  await expect(win.getByTestId("action-status")).toHaveText("в работе");
 
   // 6. Block → cannot complete while blocked → unblock → complete.
   await win.getByTestId("action-block-reason").fill("waiting on review");
   await win.getByTestId("action-block").click();
-  await expect(win.getByTestId("action-status")).toHaveText("blocked");
+  await expect(win.getByTestId("action-status")).toHaveText("заблокировано");
   await expect(win.getByTestId("action-blocker-reason")).toContainText("waiting on review");
 
   await win.getByTestId("action-unblock").click();
-  await expect(win.getByTestId("action-status")).toHaveText("open");
+  await expect(win.getByTestId("action-status")).toHaveText("в работе");
 
   await win.getByTestId("action-complete").click();
-  await expect(win.getByTestId("action-status")).toHaveText("done");
+  await expect(win.getByTestId("action-status")).toHaveText("готово");
 
-  // 7. Meaningful change history is visible.
+  // 7. Reopen undoes an accidental completion, then it can be completed again.
+  await win.getByTestId("action-reopen").click();
+  await expect(win.getByTestId("action-status")).toHaveText("в работе");
+
+  await win.getByTestId("action-complete").click();
+  await expect(win.getByTestId("action-status")).toHaveText("готово");
+
+  // 8. Meaningful change history is visible.
   await expect(win.getByTestId("history-entry").first()).toBeVisible();
 
-  // 8. Full state survives an app restart.
+  // 9. Full state survives an app restart.
   await app.close();
   const again = await launch();
   const win2 = await again.firstWindow();
   await expect(win2.getByTestId("season-focus")).toHaveValue("Recover and rebuild momentum");
   await expect(win2.getByTestId("condition")).toHaveCount(1);
   await expect(win2.getByTestId("intention-title")).toHaveValue("Ship the Living Map MVP");
-  await expect(win2.getByTestId("action-status")).toHaveText("done");
+  await expect(win2.getByTestId("action-status")).toHaveText("готово");
   await again.close();
 });

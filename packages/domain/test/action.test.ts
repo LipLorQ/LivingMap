@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { blockAction, completeAction, createAction, editAction, unblockAction } from "../src";
+import { blockAction, completeAction, createAction, editAction, reopenAction, unblockAction } from "../src";
 
 const T0 = "2026-09-27T10:00:00.000Z";
 const T1 = "2026-09-27T10:05:00.000Z";
@@ -101,6 +101,21 @@ describe("Action", () => {
         ok: false,
         reason: "Cannot complete a blocked action; unblock it first",
       });
+    });
+  });
+
+  describe("reopenAction", () => {
+    it("returns a done action to open, clears completedAt, bumps version", () => {
+      const done = completeAction(open(), T1);
+      if (!done.ok) throw new Error("unreachable");
+      expect(reopenAction(done.value, T1)).toEqual({
+        ok: true,
+        value: { ...open(), status: "open", completedAt: null, version: 3, updatedAt: T1 },
+      });
+    });
+
+    it("cannot reopen an action that is not completed", () => {
+      expect(reopenAction(open(), T1)).toEqual({ ok: false, reason: "Action is not completed" });
     });
   });
 

@@ -17,6 +17,7 @@ import type {
   IntentionDto,
   ListChangeHistoryInput,
   RemoveGoodLifeConditionInput,
+  ReopenActionInput,
   ReorderActionsInput,
   ReorderGoodLifeConditionsInput,
   ReorderStagesInput,
@@ -52,6 +53,7 @@ export const IPC_CHANNELS = {
   completeAction: "lm:command:completeAction",
   blockAction: "lm:command:blockAction",
   unblockAction: "lm:command:unblockAction",
+  reopenAction: "lm:command:reopenAction",
   reorderActions: "lm:command:reorderActions",
   stateChanged: "lm:event:stateChanged",
 } as const;
@@ -80,6 +82,7 @@ export type LivingMapApi = {
     completeAction(input: CompleteActionInput): Promise<Result<ActionDto>>;
     blockAction(input: BlockActionInput): Promise<Result<ActionDto>>;
     unblockAction(input: UnblockActionInput): Promise<Result<ActionDto>>;
+    reopenAction(input: ReopenActionInput): Promise<Result<ActionDto>>;
     reorderActions(input: ReorderActionsInput): Promise<Result<ActionDto[]>>;
   };
   events: {

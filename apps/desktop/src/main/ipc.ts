@@ -13,6 +13,7 @@ import {
   err,
   ListChangeHistoryInputSchema,
   RemoveGoodLifeConditionInputSchema,
+  ReopenActionInputSchema,
   ReorderActionsInputSchema,
   ReorderGoodLifeConditionsInputSchema,
   ReorderStagesInputSchema,
@@ -91,5 +92,6 @@ export function registerIpcHandlers(app: Application, isTrusted: TrustCheck): vo
   handle(IPC_CHANNELS.completeAction, CompleteActionInputSchema, (input) => app.commands.completeAction(ui(), input));
   handle(IPC_CHANNELS.blockAction, BlockActionInputSchema, (input) => app.commands.blockAction(ui(), input));
   handle(IPC_CHANNELS.unblockAction, UnblockActionInputSchema, (input) => app.commands.unblockAction(ui(), input));
+  handle(IPC_CHANNELS.reopenAction, ReopenActionInputSchema, (input) => app.commands.reopenAction(ui(), input));
   handle(IPC_CHANNELS.reorderActions, ReorderActionsInputSchema, (input) => app.commands.reorderActions(ui(), input));
 }

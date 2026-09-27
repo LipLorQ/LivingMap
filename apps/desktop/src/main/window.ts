@@ -25,7 +25,7 @@ export function createMainWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 960,
     height: 720,
-    title: "Living Map — spike",
+    title: "Живая карта",
     webPreferences: {
       preload: fileURLToPath(new URL("../preload/index.cjs", import.meta.url)),
       contextIsolation: true,

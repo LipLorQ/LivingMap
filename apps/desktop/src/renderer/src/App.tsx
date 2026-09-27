@@ -42,17 +42,17 @@ export function App() {
     [reload],
   );
 
-  if (!view) return <main className="p-6 font-sans text-sm">Loading…</main>;
+  if (!view) return <main className="p-6 font-sans text-sm">Загрузка…</main>;
 
   return (
     <main className="mx-auto max-w-3xl space-y-8 p-6 font-sans text-sm text-neutral-900">
       <header>
-        <h1 className="text-lg font-semibold">Living Map</h1>
+        <h1 className="text-lg font-semibold">Живая карта</h1>
       </header>
 
       {lastError && (
         <p data-testid="error" className="rounded border border-red-300 bg-red-50 px-2 py-1 text-red-800">
-          {lastError.code}: {lastError.message}
+          {translateErrorCode(lastError.code)}
         </p>
       )}
 
@@ -108,16 +108,68 @@ export function App() {
           run(window.livingMap.commands.blockAction({ id, expectedVersion, reason }))
         }
         onUnblockAction={(id, expectedVersion) => run(window.livingMap.commands.unblockAction({ id, expectedVersion }))}
+        onReopenAction={(id, expectedVersion) => run(window.livingMap.commands.reopenAction({ id, expectedVersion }))}
         onReorderActions={(stageId, orderedIds) =>
           run(window.livingMap.commands.reorderActions({ stageId, orderedIds }))
         }
       />
 
       <ChangeHistorySection entries={history} />
-
-      <IsolationFooter />
     </main>
   );
+}
+
+const ERROR_MESSAGES: Record<AppError["code"], string> = {
+  VALIDATION_ERROR: "Проверьте введённые данные.",
+  NOT_FOUND: "Не найдено.",
+  CONFLICT_RELOAD: "Данные изменились в другом месте — обновите и попробуйте снова.",
+  PERMISSION_DENIED: "Действие не разрешено.",
+  REQUIRES_CONFIRMATION: "Требуется подтверждение.",
+  STALE_PROPOSAL: "Предложение устарело.",
+  NEEDS_AI_REPLAN: "Нужно перепланирование ИИ.",
+  INTEGRATION_UNAVAILABLE: "Внешний сервис недоступен.",
+  STORAGE_ERROR: "Не удалось сохранить данные.",
+  SCHEMA_INCOMPATIBLE: "Версия данных несовместима с приложением.",
+};
+
+function translateErrorCode(code: AppError["code"]): string {
+  return ERROR_MESSAGES[code] ?? "Произошла ошибка.";
+}
+
+const HISTORY_LABELS: Record<string, string> = {
+  "season.create": "Задан фокус сезона",
+  "season.updateFocus": "Изменён фокус сезона",
+  "goodLifeCondition.add": "Добавлено ограничение: чем пользователь не хочет жертвовать",
+  "goodLifeCondition.edit": "Изменено ограничение",
+  "goodLifeCondition.remove": "Удалено ограничение",
+  "goodLifeCondition.reorder": "Изменён порядок ограничений",
+  "intention.create": "Создан замысел",
+  "intention.update": "Изменён замысел",
+  "stage.add": "Добавлен этап",
+  "stage.edit": "Изменён этап",
+  "stage.reorder": "Изменён порядок этапов",
+  "stage.setCurrent": "Изменён текущий этап",
+  "action.add": "Добавлено действие",
+  "action.edit": "Изменено действие",
+  "action.complete": "Действие завершено",
+  "action.block": "Действие заблокировано",
+  "action.unblock": "Действие снова доступно",
+  "action.reopen": "Действие возвращено в работу",
+  "action.reorder": "Изменён порядок действий",
+};
+
+function translateHistoryEntry(commandType: string): string {
+  return HISTORY_LABELS[commandType] ?? "Изменение";
+}
+
+const ACTION_STATUS_LABELS: Record<ActionDto["status"], string> = {
+  open: "в работе",
+  blocked: "заблокировано",
+  done: "готово",
+};
+
+function translateActionStatus(status: ActionDto["status"]): string {
+  return ACTION_STATUS_LABELS[status] ?? status;
 }
 
 function reorderIds<T extends { id: string }>(items: readonly T[], index: number, delta: -1 | 1): string[] {
@@ -172,7 +224,7 @@ function SeasonSection({
   useEffect(() => setDraft(season?.focus ?? ""), [season?.focus]);
   return (
     <section data-testid="season" className="space-y-1 rounded border p-3">
-      <h2 className="font-semibold">Current Season</h2>
+      <h2 className="font-semibold">Фокус сезона</h2>
       <textarea
         data-testid="season-focus"
         className="w-full rounded border px-2 py-1"
@@ -186,7 +238,7 @@ function SeasonSection({
         className="rounded border px-2 py-0.5"
         onClick={() => (season ? onUpdate(season.version, draft) : onCreate(draft))}
       >
-        {season ? "Update season" : "Set season"}
+        Сохранить фокус
       </button>
     </section>
   );
@@ -208,14 +260,14 @@ function GoodLifeConditionsSection({
   const [newText, setNewText] = useState("");
   return (
     <section data-testid="good-life-conditions" className="space-y-2 rounded border p-3">
-      <h2 className="font-semibold">Good Life Conditions</h2>
+      <h2 className="font-semibold">Чем ты не хочешь жертвовать ради целей?</h2>
       <ul className="space-y-1">
         {conditions.map((c, i) => (
           <li key={c.id} data-testid="condition" data-id={c.id} className="flex items-center gap-2">
             <EditableText value={c.text} onSave={(text) => onEdit(c.id, c.version, text)} testId="condition-text" />
             <ReorderButtons items={conditions} index={i} onReorder={onReorder} />
             <button type="button" data-testid="condition-remove" onClick={() => onRemove(c.id, c.version)}>
-              Remove
+              Удалить
             </button>
           </li>
         ))}
@@ -226,7 +278,7 @@ function GoodLifeConditionsSection({
           className="flex-1 rounded border px-2 py-1"
           value={newText}
           onChange={(e) => setNewText(e.target.value)}
-          placeholder="What must stay true?"
+          placeholder="Например: сном, здоровьем, отношениями, свободным временем..."
         />
         <button
           type="button"
@@ -236,7 +288,7 @@ function GoodLifeConditionsSection({
             setNewText("");
           }}
         >
-          Add
+          Добавить
         </button>
       </div>
     </section>
@@ -267,7 +319,7 @@ function EditableText({
       />
       {draft !== value && (
         <button type="button" data-testid={`${testId}-save`} onClick={() => onSave(draft)}>
-          Save
+          Сохранить
         </button>
       )}
     </span>
@@ -279,18 +331,18 @@ function CreateIntentionForm({ onCreate }: { onCreate: (title: string, desiredRe
   const [desiredResult, setDesiredResult] = useState("");
   return (
     <section data-testid="intention-create" className="space-y-2 rounded border p-3">
-      <h2 className="font-semibold">New Intention</h2>
+      <h2 className="font-semibold">Новый замысел</h2>
       <input
         data-testid="intention-title-new"
         className="w-full rounded border px-2 py-1"
-        placeholder="Title"
+        placeholder="Название замысла"
         value={title}
         onChange={(e) => setTitle(e.target.value)}
       />
       <textarea
         data-testid="intention-desired-result-new"
         className="w-full rounded border px-2 py-1"
-        placeholder="Desired result: what must become true?"
+        placeholder="Что должно стать реальностью, чтобы этот замысел считался воплощённым?"
         value={desiredResult}
         onChange={(e) => setDesiredResult(e.target.value)}
       />
@@ -303,7 +355,7 @@ function CreateIntentionForm({ onCreate }: { onCreate: (title: string, desiredRe
           setDesiredResult("");
         }}
       >
-        Create Intention
+        Создать замысел
       </button>
     </section>
   );
@@ -323,6 +375,7 @@ type IntentionSectionProps = {
   onCompleteAction: (id: string, expectedVersion: number) => void;
   onBlockAction: (id: string, expectedVersion: number, reason: string) => void;
   onUnblockAction: (id: string, expectedVersion: number) => void;
+  onReopenAction: (id: string, expectedVersion: number) => void;
   onReorderActions: (stageId: string, orderedIds: string[]) => void;
 };
 
@@ -343,7 +396,7 @@ function IntentionEditor(props: IntentionSectionProps & { intention: IntentionDt
 
   return (
     <section data-testid="intention" className="space-y-3 rounded border p-3">
-      <h2 className="font-semibold">Intention</h2>
+      <h2 className="font-semibold">Замысел</h2>
       <input
         data-testid="intention-title"
         className="w-full rounded border px-2 py-1 font-medium"
@@ -353,7 +406,7 @@ function IntentionEditor(props: IntentionSectionProps & { intention: IntentionDt
       <textarea
         data-testid="intention-desired-result"
         className="w-full rounded border px-2 py-1"
-        placeholder="Desired result"
+        placeholder="Желаемый результат"
         value={resultDraft}
         onChange={(e) => setResultDraft(e.target.value)}
       />
@@ -363,7 +416,7 @@ function IntentionEditor(props: IntentionSectionProps & { intention: IntentionDt
           data-testid="intention-save"
           onClick={() => props.onUpdateIntention(intention.id, intention.version, titleDraft, resultDraft)}
         >
-          Save Intention
+          Сохранить замысел
         </button>
       )}
 
@@ -376,7 +429,7 @@ function StagesSection({ intention, stages, ...handlers }: IntentionSectionProps
   const [newTitle, setNewTitle] = useState("");
   return (
     <div data-testid="stages" className="space-y-3 border-t pt-3">
-      <h3 className="font-semibold">Stages</h3>
+      <h3 className="font-semibold">Этапы</h3>
       {stages.map((stage, i) => (
         <StageBlock key={stage.id} stage={stage} stages={stages} index={i} intention={intention} {...handlers} />
       ))}
@@ -384,7 +437,7 @@ function StagesSection({ intention, stages, ...handlers }: IntentionSectionProps
         <input
           data-testid="stage-new"
           className="flex-1 rounded border px-2 py-1"
-          placeholder="New stage title"
+          placeholder="Название нового этапа"
           value={newTitle}
           onChange={(e) => setNewTitle(e.target.value)}
         />
@@ -396,7 +449,7 @@ function StagesSection({ intention, stages, ...handlers }: IntentionSectionProps
             setNewTitle("");
           }}
         >
-          Add stage
+          Добавить этап
         </button>
       </div>
     </div>
@@ -429,14 +482,14 @@ function StageBlock({
         />
         <ReorderButtons items={stages} index={index} onReorder={(ids) => handlers.onReorderStages(intention.id, ids)} />
         {stage.isCurrent ? (
-          <span data-testid="stage-current-badge">current</span>
+          <span data-testid="stage-current-badge">текущий</span>
         ) : (
           <button
             type="button"
             data-testid="stage-set-current"
             onClick={() => handlers.onSetCurrentStage(intention.id, stage.id)}
           >
-            Make current
+            Сделать текущим
           </button>
         )}
       </div>
@@ -447,6 +500,7 @@ function StageBlock({
         onCompleteAction={handlers.onCompleteAction}
         onBlockAction={handlers.onBlockAction}
         onUnblockAction={handlers.onUnblockAction}
+        onReopenAction={handlers.onReopenAction}
         onReorderActions={handlers.onReorderActions}
       />
     </div>
@@ -460,10 +514,17 @@ function ActionsSection({
   onCompleteAction,
   onBlockAction,
   onUnblockAction,
+  onReopenAction,
   onReorderActions,
 }: Pick<
   IntentionSectionProps,
-  "onAddAction" | "onEditAction" | "onCompleteAction" | "onBlockAction" | "onUnblockAction" | "onReorderActions"
+  | "onAddAction"
+  | "onEditAction"
+  | "onCompleteAction"
+  | "onBlockAction"
+  | "onUnblockAction"
+  | "onReopenAction"
+  | "onReorderActions"
 > & { stage: StageWithActionsDto }) {
   const [newTitle, setNewTitle] = useState("");
   const [newDoneWhen, setNewDoneWhen] = useState("");
@@ -479,6 +540,7 @@ function ActionsSection({
           onCompleteAction={onCompleteAction}
           onBlockAction={onBlockAction}
           onUnblockAction={onUnblockAction}
+          onReopenAction={onReopenAction}
           onReorderActions={(ids) => onReorderActions(stage.id, ids)}
         />
       ))}
@@ -486,14 +548,14 @@ function ActionsSection({
         <input
           data-testid="action-title-new"
           className="rounded border px-2 py-0.5"
-          placeholder="Action title"
+          placeholder="Новое действие"
           value={newTitle}
           onChange={(e) => setNewTitle(e.target.value)}
         />
         <input
           data-testid="action-done-when-new"
           className="flex-1 rounded border px-2 py-0.5"
-          placeholder="doneWhen"
+          placeholder="Готово, когда"
           value={newDoneWhen}
           onChange={(e) => setNewDoneWhen(e.target.value)}
         />
@@ -506,7 +568,7 @@ function ActionsSection({
             setNewDoneWhen("");
           }}
         >
-          Add action
+          Добавить действие
         </button>
       </div>
     </div>
@@ -521,6 +583,7 @@ function ActionRow({
   onCompleteAction,
   onBlockAction,
   onUnblockAction,
+  onReopenAction,
   onReorderActions,
 }: {
   action: ActionDto;
@@ -530,6 +593,7 @@ function ActionRow({
   onCompleteAction: (id: string, expectedVersion: number) => void;
   onBlockAction: (id: string, expectedVersion: number, reason: string) => void;
   onUnblockAction: (id: string, expectedVersion: number) => void;
+  onReopenAction: (id: string, expectedVersion: number) => void;
   onReorderActions: (orderedIds: string[]) => void;
 }) {
   const [blockReason, setBlockReason] = useState("");
@@ -542,7 +606,7 @@ function ActionRow({
           onSave={(title) => onEditAction(action.id, action.version, title, action.doneWhen)}
         />
         <ReorderButtons items={actions} index={index} onReorder={onReorderActions} />
-        <span data-testid="action-status">{action.status}</span>
+        <span data-testid="action-status">{translateActionStatus(action.status)}</span>
       </div>
       <EditableText
         testId="action-done-when"
@@ -551,7 +615,7 @@ function ActionRow({
       />
       {action.status === "blocked" && action.blocker && (
         <p data-testid="action-blocker-reason" className="text-red-700">
-          Blocked: {action.blocker.reason}
+          Причина блокировки: {action.blocker.reason}
         </p>
       )}
       <div className="flex gap-2">
@@ -562,12 +626,12 @@ function ActionRow({
               data-testid="action-complete"
               onClick={() => onCompleteAction(action.id, action.version)}
             >
-              Complete
+              Готово
             </button>
             <input
               data-testid="action-block-reason"
               className="rounded border px-1"
-              placeholder="Blocker reason"
+              placeholder="Причина блокировки"
               value={blockReason}
               onChange={(e) => setBlockReason(e.target.value)}
             />
@@ -576,13 +640,18 @@ function ActionRow({
               data-testid="action-block"
               onClick={() => onBlockAction(action.id, action.version, blockReason)}
             >
-              Block
+              Заблокировать
             </button>
           </>
         )}
         {action.status === "blocked" && (
           <button type="button" data-testid="action-unblock" onClick={() => onUnblockAction(action.id, action.version)}>
-            Unblock
+            Разблокировать
+          </button>
+        )}
+        {action.status === "done" && (
+          <button type="button" data-testid="action-reopen" onClick={() => onReopenAction(action.id, action.version)}>
+            Вернуть в работу
           </button>
         )}
       </div>
@@ -593,26 +662,14 @@ function ActionRow({
 function ChangeHistorySection({ entries }: { entries: ChangeLogEntryDto[] }) {
   return (
     <section data-testid="change-history" className="space-y-1 rounded border p-3">
-      <h2 className="font-semibold">Recent Changes</h2>
+      <h2 className="font-semibold">История изменений</h2>
       <ul className="space-y-0.5 text-neutral-600">
         {entries.map((entry) => (
           <li key={entry.id} data-testid="history-entry">
-            v{entry.stateRevision} · {entry.actor} · {entry.commandType} · {entry.summary}
+            {translateHistoryEntry(entry.commandType)}
           </li>
         ))}
       </ul>
     </section>
-  );
-}
-
-function IsolationFooter() {
-  const isolation = {
-    require: typeof (window as unknown as Record<string, unknown>).require,
-    process: typeof (window as unknown as Record<string, unknown>).process,
-  };
-  return (
-    <p className="text-neutral-400" data-testid="isolation">
-      window.require: {isolation.require} · window.process: {isolation.process}
-    </p>
   );
 }

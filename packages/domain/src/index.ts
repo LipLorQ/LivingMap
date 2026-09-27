@@ -7,6 +7,7 @@ export {
   createAction,
   DONE_WHEN_MAX,
   editAction,
+  reopenAction,
   unblockAction,
 } from "./action";
 export type { GoodLifeCondition } from "./good-life-condition";

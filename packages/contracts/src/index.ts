@@ -5,6 +5,7 @@ export type {
   BlockerDto,
   CompleteActionInput,
   EditActionInput,
+  ReopenActionInput,
   ReorderActionsInput,
   UnblockActionInput,
 } from "./action";
@@ -16,6 +17,7 @@ export {
   BlockerDtoSchema,
   CompleteActionInputSchema,
   EditActionInputSchema,
+  ReopenActionInputSchema,
   ReorderActionsInputSchema,
   UnblockActionInputSchema,
 } from "./action";

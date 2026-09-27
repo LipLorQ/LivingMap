@@ -345,6 +345,16 @@ describe("Intention → Stage → Action", () => {
     const completed = app.commands.completeAction(ui, { id: action1.value.id, expectedVersion: 3 });
     expect(completed).toMatchObject({ ok: true, value: { status: "done" } });
 
+    expect(app.commands.reopenAction(ui, { id: action1.value.id, expectedVersion: 5 })).toMatchObject({
+      ok: false,
+      error: { code: "CONFLICT_RELOAD" },
+    });
+    const reopened = app.commands.reopenAction(ui, { id: action1.value.id, expectedVersion: 4 });
+    expect(reopened).toMatchObject({ ok: true, value: { status: "open", completedAt: null } });
+
+    const recompleted = app.commands.completeAction(ui, { id: action1.value.id, expectedVersion: 5 });
+    expect(recompleted).toMatchObject({ ok: true, value: { status: "done" } });
+
     const reordered = app.commands.reorderActions(ui, {
       stageId: stage2.value.id,
       orderedIds: [action2.value.id, action1.value.id],

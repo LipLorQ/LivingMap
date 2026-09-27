@@ -18,6 +18,7 @@ import {
   type ListChangeHistoryInput,
   ok,
   type RemoveGoodLifeConditionInput,
+  type ReopenActionInput,
   type ReorderActionsInput,
   type ReorderGoodLifeConditionsInput,
   type ReorderStagesInput,
@@ -48,6 +49,7 @@ import {
   type GoodLifeCondition,
   type Intention,
   isAtVersion,
+  reopenAction,
   type Season,
   type Stage,
   unblockAction,
@@ -565,6 +567,30 @@ export function createApplication(deps: ApplicationDeps) {
               summary: "unblocked",
             });
             return ok(toActionDto(unblocked.value));
+          }),
+        ),
+
+      reopenAction: (ctx: CommandContext, input: ReopenActionInput): Result<ActionDto> =>
+        authorize("action.reopen", ctx) ??
+        guarded("reopenAction", () =>
+          transact(ctx, (s): Result<ActionDto> => {
+            const current = s.actions.findById(input.id);
+            if (!current) return err("NOT_FOUND", "Action not found");
+            if (!isAtVersion(current, input.expectedVersion)) {
+              return err("CONFLICT_RELOAD", `Action changed (now v${current.version}); reload and retry`);
+            }
+            const reopened = reopenAction(current, clock.now());
+            if (!reopened.ok) return err("VALIDATION_ERROR", reopened.reason);
+            if (!s.actions.updateIfVersion(reopened.value, input.expectedVersion)) {
+              return err("CONFLICT_RELOAD", "Action changed concurrently; reload and retry");
+            }
+            s.recordChange({
+              commandType: "action.reopen",
+              entityType: "action",
+              entityId: current.id,
+              summary: "reopened",
+            });
+            return ok(toActionDto(reopened.value));
           }),
         ),
 

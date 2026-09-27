@@ -129,3 +129,11 @@ export function completeAction(action: Action, now: Instant): DomainResult<Actio
     value: { ...action, status: "done", completedAt: now, version: action.version + 1, updatedAt: now },
   };
 }
+
+export function reopenAction(action: Action, now: Instant): DomainResult<Action> {
+  if (action.status !== "done") return { ok: false, reason: "Action is not completed" };
+  return {
+    ok: true,
+    value: { ...action, status: "open", completedAt: null, version: action.version + 1, updatedAt: now },
+  };
+}

@@ -27,6 +27,7 @@ export const COMMAND_POLICY = {
   "action.complete": ["user-ui", "system"],
   "action.block": ["user-ui", "system"],
   "action.unblock": ["user-ui", "system"],
+  "action.reopen": ["user-ui", "system"],
   "action.reorder": ["user-ui", "system"],
 } as const satisfies Record<string, readonly Actor[]>;
 

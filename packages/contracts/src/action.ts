@@ -46,5 +46,8 @@ export type BlockActionInput = z.infer<typeof BlockActionInputSchema>;
 export const UnblockActionInputSchema = z.strictObject({ id: Id, expectedVersion: Version });
 export type UnblockActionInput = z.infer<typeof UnblockActionInputSchema>;
 
+export const ReopenActionInputSchema = z.strictObject({ id: Id, expectedVersion: Version });
+export type ReopenActionInput = z.infer<typeof ReopenActionInputSchema>;
+
 export const ReorderActionsInputSchema = z.strictObject({ stageId: Id, orderedIds: z.array(Id).min(1) });
 export type ReorderActionsInput = z.infer<typeof ReorderActionsInputSchema>;

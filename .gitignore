@@ -11,3 +11,6 @@ playwright-report/
 *.sqlite.restoring
 *.sqlite.tmp
 .omc/
+
+# local scratch
+.dev-app.log

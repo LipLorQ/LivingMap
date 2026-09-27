@@ -23,12 +23,12 @@ import { createMainWindow, isTrustedRendererFrame } from "./window";
  */
 function describeOpenFailure(message: string): string {
   if (/newer than this app/.test(message)) {
-    return "The data was created by a newer version of Living Map. Please update the app.";
+    return "Данные были созданы более новой версией Живой карты. Обновите приложение.";
   }
   if (/not a database|malformed|file is encrypted|exists but is empty/i.test(message)) {
-    return "Living Map's local data appears to be damaged. A backup may be available under the app's backups folder; see logs for details.";
+    return "Локальные данные Живой карты повреждены. Резервная копия может быть доступна в папке backups приложения; подробности в логах.";
   }
-  return "Living Map could not open its local data. See logs for details.";
+  return "Живой карте не удалось открыть локальные данные. Подробности в логах.";
 }
 
 function openDatabaseOrExit(): SqliteHandle | undefined {
@@ -37,7 +37,7 @@ function openDatabaseOrExit(): SqliteHandle | undefined {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[living-map] cannot open database: ${message}`);
-    dialog.showErrorBox("Living Map", describeOpenFailure(message));
+    dialog.showErrorBox("Живая карта", describeOpenFailure(message));
     app.exit(1);
     return undefined;
   }
