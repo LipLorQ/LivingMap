@@ -1,0 +1,24 @@
+{
+  "name": "@living-map/persistence-sqlite",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "db:generate": "drizzle-kit generate && node scripts/embed-migrations.mjs"
+  },
+  "dependencies": {
+    "@living-map/application": "workspace:*",
+    "@living-map/domain": "workspace:*",
+    "better-sqlite3": "13.0.3",
+    "drizzle-orm": "0.45.3"
+  },
+  "devDependencies": {
+    "@living-map/contracts": "workspace:*",
+    "@types/better-sqlite3": "9.6.0",
+    "drizzle-kit": "0.31.11"
+  }
+}

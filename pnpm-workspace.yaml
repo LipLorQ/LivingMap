@@ -1,0 +1,13 @@
+packages:
+  - apps/*
+  - packages/*
+
+# pnpm 12 blocks dependency build scripts unless explicitly allowed.
+allowBuilds:
+  # Downloads the Electron binary in postinstall.
+  electron: true
+  # Installs its platform-specific native binary.
+  esbuild: true
+  # Must stay false: v13 ships an N-API prebuild (prebuilds/win32-x64.node) inside the tarball.
+  # Allowing the implicit node-gyp build would require MSVC and is never needed (ADR-0001).
+  better-sqlite3: false

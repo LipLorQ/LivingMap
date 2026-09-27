@@ -1,0 +1,40 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+  "files": {
+    "includes": ["**", "!**/migrations.generated.ts", "!**/drizzle/meta", "!**/*.md"]
+  },
+  "formatter": { "indentStyle": "space", "indentWidth": 2, "lineWidth": 120 },
+  "linter": { "enabled": true, "rules": { "preset": "recommended" } },
+  "assist": { "actions": { "source": { "organizeImports": "on" } } },
+  "overrides": [
+    {
+      "includes": ["packages/domain/**", "packages/application/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["electron", "electron/*", "react", "react-*", "react/*"],
+                    "message": "Domain/Application must not depend on UI or Electron (ARCHITECTURE §6)."
+                  },
+                  {
+                    "group": ["drizzle-orm", "drizzle-orm/*", "better-sqlite3", "node:sqlite", "@libsql/*"],
+                    "message": "Domain/Application must not depend on SQLite or Drizzle (ARCHITECTURE §6)."
+                  },
+                  {
+                    "group": ["@modelcontextprotocol/*", "@living-map/persistence-sqlite"],
+                    "message": "Domain/Application must not depend on MCP SDK or persistence adapters (ARCHITECTURE §6)."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

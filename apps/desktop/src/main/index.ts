@@ -1,0 +1,63 @@
+// Desktop composition root (ARCHITECTURE §9): config/path → SQLite connection (+ migrations)
+// → repositories → application services → IPC handlers.
+import { createApplication } from "@living-map/application";
+import { IPC_CHANNELS } from "@living-map/contracts/ipc";
+import {
+  createSqliteStore,
+  databaseFile,
+  openDesktopDatabase,
+  resolveDataHome,
+  type SqliteHandle,
+  systemClock,
+  uuidGenerator,
+} from "@living-map/persistence-sqlite";
+import { app, BrowserWindow, dialog } from "electron";
+import { registerIpcHandlers } from "./ipc";
+import { watchStateRevision } from "./revision-watcher";
+import { createMainWindow, isTrustedRendererFrame } from "./window";
+
+function openDatabaseOrExit(): SqliteHandle | undefined {
+  try {
+    return openDesktopDatabase(databaseFile(resolveDataHome()));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[living-map] cannot open database: ${message}`);
+    // Controlled failure: no stack traces or local paths in the dialog.
+    dialog.showErrorBox(
+      "Living Map",
+      /newer than this app/.test(message)
+        ? "The data was created by a newer version of Living Map. Please update the app."
+        : "Living Map could not open its local data. See logs for details.",
+    );
+    app.exit(1);
+    return undefined;
+  }
+}
+
+app.whenReady().then(() => {
+  const handle = openDatabaseOrExit();
+  if (!handle) return;
+
+  const application = createApplication({
+    store: createSqliteStore(handle, uuidGenerator),
+    clock: systemClock,
+    ids: uuidGenerator,
+    reportError: (operation, error) =>
+      console.error(`[living-map] ${operation} failed: ${error instanceof Error ? error.message : "unknown"}`),
+  });
+
+  registerIpcHandlers(application, isTrustedRendererFrame);
+
+  // Picks up writes made by the MCP process (or anyone) and tells the renderer to re-query (ARCHITECTURE §15).
+  const stopWatching = watchStateRevision(application, (change) => {
+    for (const win of BrowserWindow.getAllWindows()) win.webContents.send(IPC_CHANNELS.stateChanged, change);
+  });
+
+  createMainWindow();
+
+  app.on("window-all-closed", () => app.quit());
+  app.on("will-quit", () => {
+    stopWatching();
+    handle.close();
+  });
+});
