@@ -26,7 +26,14 @@ let ready: { backend: McpBackend; handle: SqliteHandle } | undefined;
  */
 function resolveBackend(): McpBackend {
   if (ready) return ready.backend;
-  const opened = openMcpDatabase(file);
+  let opened: ReturnType<typeof openMcpDatabase>;
+  try {
+    opened = openMcpDatabase(file);
+  } catch (error) {
+    // Corrupted/unreadable file: fail this call, never crash the process or touch the file.
+    console.error(`[living-map-mcp] cannot open database: ${error instanceof Error ? error.message : "unknown"}`);
+    return { status: "unavailable", reason: "Living Map database could not be opened. Open the desktop app first." };
+  }
   if (opened.status === "ready") {
     const app = createApplication({
       store: createSqliteStore(opened.handle, uuidGenerator),
@@ -47,7 +54,18 @@ function resolveBackend(): McpBackend {
   return { status: "unavailable", reason };
 }
 
-const server = createLivingMapMcpServer(resolveBackend, VERSION);
+/**
+ * Drops the cached backend so the next call reopens (ADR-0003). Without this, a `ready` handle
+ * that just failed its per-write schema check (desktop migrated while this process was idle)
+ * would keep returning a generic SCHEMA_INCOMPATIBLE forever, instead of reopening and reporting
+ * the actual current/expected schema versions — or succeeding outright once desktop is current.
+ */
+function invalidateBackend(): void {
+  ready?.handle.close();
+  ready = undefined;
+}
+
+const server = createLivingMapMcpServer(resolveBackend, invalidateBackend, VERSION);
 const transport = new StdioServerTransport();
 
 function shutdown(): void {

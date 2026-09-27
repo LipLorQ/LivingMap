@@ -64,4 +64,10 @@ describe("dependency direction (ARCHITECTURE §6)", () => {
   it("MCP app never imports SQL/Drizzle/SQLite driver — only the persistence adapter's composition API", () => {
     expect(violations("apps/mcp/src", /^(drizzle-orm|better-sqlite3|node:sqlite)(\/|$)/)).toEqual([]);
   });
+
+  it("MCP app never touches migration/backup internals or the raw sqlite handle (ADR-0003)", () => {
+    const forbidden = /\bapplyMigrations\b|\bcreateBackup\b|\brestoreBackup\b|\.sqlite\b/;
+    const hits = sourceFiles("apps/mcp/src").filter((f) => forbidden.test(readFileSync(f, "utf8")));
+    expect(hits.map((f) => relative(root, f))).toEqual([]);
+  });
 });

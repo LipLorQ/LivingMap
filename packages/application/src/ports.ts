@@ -56,3 +56,15 @@ export type WriteContextMeta = {
   correlationId: EntityId;
   timestamp: Instant;
 };
+
+/**
+ * Thrown by a `Store` implementation when the on-disk schema no longer matches the one this
+ * process opened with (ADR-0003: MCP checks this on every write, not just at open). Caught by
+ * `createApplication` and mapped to the stable `SCHEMA_INCOMPATIBLE` error code.
+ */
+export class SchemaConflictError extends Error {
+  constructor(message = "Database schema changed since this process opened it") {
+    super(message);
+    this.name = "SchemaConflictError";
+  }
+}

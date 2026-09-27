@@ -1,10 +1,12 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApplication } from "@living-map/application";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  applyMigrations,
   BUSY_TIMEOUT_MS,
+  backupsDir,
   createSqliteStore,
   databaseFile,
   EXPECTED_SCHEMA_VERSION,
@@ -173,5 +175,114 @@ describe("two connections share one database", () => {
     ).toThrow("crash mid-command");
     expect(app.queries.listProbes()).toEqual({ ok: true, value: [] });
     expect(app.queries.getStateRevision()).toEqual({ ok: true, value: { stateRevision: 0 } });
+  });
+
+  it("recordChange invariant: a command that mutates rows but forgets recordChange rolls back entirely (ADR-0003)", () => {
+    const h = desktop();
+    const store = createSqliteStore(h, uuidGenerator);
+    const app = appOn(h);
+    expect(() =>
+      store.write(app.newContext("system", "test"), (s) => {
+        s.probes.insert({
+          id: uuidGenerator.next(),
+          title: "forgot recordChange",
+          version: 1,
+          createdAt: systemClock.now(),
+          updatedAt: systemClock.now(),
+        });
+        // No s.recordChange(...) call here — must not silently commit.
+      }),
+    ).toThrow(/recordChange/);
+    expect(app.queries.listProbes()).toEqual({ ok: true, value: [] });
+    expect(app.queries.getStateRevision()).toEqual({ ok: true, value: { stateRevision: 0 } });
+  });
+
+  it("does not require recordChange when a write makes no row changes (e.g. a no-op check)", () => {
+    const h = desktop();
+    const store = createSqliteStore(h, uuidGenerator);
+    const app = appOn(h);
+    expect(store.write(app.newContext("system", "test"), (s) => s.probes.list())).toEqual([]);
+  });
+});
+
+describe("per-write schema check (ADR-0003)", () => {
+  it("a write started after the schema changed under this process fails with SchemaConflictError, not a silent write", () => {
+    const h = desktop();
+    const store = createSqliteStore(h, uuidGenerator);
+    const app = createApplication({ store, clock: systemClock, ids: uuidGenerator });
+    const created = app.commands.createProbe(app.newContext("system", "test"), { title: "x" });
+    if (!created.ok) throw new Error(created.error.message);
+
+    // Simulate desktop migrating the schema further while this connection is still open.
+    h.sqlite.pragma(`user_version = ${EXPECTED_SCHEMA_VERSION + 1}`);
+
+    const result = app.commands.renameProbe(app.newContext("mcp-ai", "test"), {
+      id: created.value.id,
+      expectedVersion: 1,
+      title: "y",
+    });
+    expect(result).toMatchObject({ ok: false, error: { code: "SCHEMA_INCOMPATIBLE" } });
+  });
+
+  it("also protects desktop itself — e.g. a second, older desktop instance left running", () => {
+    // Two desktop connections on the same file: the first migrates, the second (still holding
+    // its original connection open) must not keep writing as if nothing changed.
+    const first = desktop();
+    const second = appOn(mcp()); // a second connection on the same file; MCP's open is convenient here
+    first.sqlite.pragma(`user_version = ${EXPECTED_SCHEMA_VERSION + 1}`); // simulate a newer schema landing
+
+    const result = second.commands.createProbe(second.newContext("user-ui", "test"), { title: "x" });
+    expect(result).toMatchObject({ ok: false, error: { code: "SCHEMA_INCOMPATIBLE" } });
+  });
+});
+
+describe("FK-safe migration lifecycle (ADR-0003)", () => {
+  it("leaves foreign_keys back ON after a successful migration", () => {
+    const h = desktop(); // migrations already ran during open
+    expect(h.sqlite.pragma("foreign_keys", { simple: true })).toBe(1);
+  });
+
+  it("a failing migration rolls back atomically, restores foreign_keys, and does not bump user_version", () => {
+    const h = desktop();
+    h.sqlite.pragma("user_version = 0"); // pretend nothing is applied yet, to re-run migrations
+    const badMigrations = [{ statements: ["this is not valid sql;"] }];
+
+    expect(() => applyMigrations(h.sqlite, badMigrations)).toThrow();
+    expect(h.sqlite.pragma("user_version", { simple: true })).toBe(0);
+    expect(h.sqlite.pragma("foreign_keys", { simple: true })).toBe(1);
+  });
+
+  it("a migration that leaves a foreign key violation is rejected and rolled back", () => {
+    const h = desktop();
+    h.sqlite.exec("CREATE TABLE parent (id INTEGER PRIMARY KEY)");
+    h.sqlite.pragma("user_version = 0");
+    const migrations = [
+      {
+        statements: [
+          "CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent(id))",
+          "INSERT INTO child (id, parent_id) VALUES (1, 999)", // 999 does not exist in parent
+        ],
+      },
+    ];
+
+    expect(() => applyMigrations(h.sqlite, migrations)).toThrow(/foreign key violation/i);
+    expect(h.sqlite.pragma("user_version", { simple: true })).toBe(0);
+    // The whole migration transaction rolled back, including the CREATE TABLE — no half-applied schema.
+    expect(() => h.sqlite.prepare("select count(*) from child").get()).toThrow(/no such table/i);
+    expect(h.sqlite.pragma("foreign_keys", { simple: true })).toBe(1);
+  });
+
+  it("takes an automatic backup before attempting a pending migration, even if that migration then fails", () => {
+    const h = desktop();
+    expect(existsSync(backupsDir(home))).toBe(false); // fresh DB: nothing backed up yet
+
+    // Pretend one migration is still pending. Re-running the (non-idempotent) seed migration
+    // fails — the point of this test is that the backup happens up front regardless.
+    h.sqlite.pragma(`user_version = ${EXPECTED_SCHEMA_VERSION - 1}`);
+    h.close();
+
+    expect(() => openDesktopDatabase(file)).toThrow();
+    expect(existsSync(backupsDir(home))).toBe(true);
+    expect(readdirSync(backupsDir(home)).some((f) => f.startsWith("auto-"))).toBe(true);
   });
 });

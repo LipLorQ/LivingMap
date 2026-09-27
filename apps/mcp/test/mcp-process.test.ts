@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -100,6 +100,17 @@ describe("MCP surface", () => {
       await call(client, "rename_probe", { id: probe.id, title: "b", expectedVersion: 1, sql: "drop table probes" }),
     ).toMatchObject({ ok: false });
     expect(app.queries.getProbe({ id: probe.id })).toMatchObject({ value: { title: "a", version: 1 } });
+  });
+
+  it("a corrupted database file fails the tool call gracefully instead of crashing the MCP process", async () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(databaseFile(home), "not a valid sqlite file, just garbage bytes");
+
+    const client = await spawnMcp();
+    const result = await call(client, "list_probes");
+    expect(result).toMatchObject({ ok: false });
+    // The process is still alive and answers further calls (would hang/reject if it had crashed).
+    expect(await call(client, "get_state_revision")).toMatchObject({ ok: false });
   });
 
   it("refuses to serve (SCHEMA_INCOMPATIBLE) without creating the DB, then recovers once desktop has run", async () => {

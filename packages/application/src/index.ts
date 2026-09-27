@@ -15,3 +15,4 @@ export type {
   WriteContextMeta,
   WriteScope,
 } from "./ports";
+export { SchemaConflictError } from "./ports";

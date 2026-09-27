@@ -11,7 +11,7 @@ import {
 import { createProbe, isAtVersion, type Probe, renameProbe } from "@living-map/domain";
 import { type Actor, type CommandContext, type CommandSource, createCommandContext } from "./context";
 import { type CommandName, isAllowed } from "./policy";
-import type { Clock, IdGenerator, Store, WriteScope } from "./ports";
+import { type Clock, type IdGenerator, SchemaConflictError, type Store, type WriteScope } from "./ports";
 
 export type ApplicationDeps = {
   store: Store;
@@ -36,6 +36,9 @@ export function createApplication(deps: ApplicationDeps) {
       return run();
     } catch (error) {
       deps.reportError?.(operation, error);
+      if (error instanceof SchemaConflictError) {
+        return err("SCHEMA_INCOMPATIBLE", "Database schema changed; reopen the Living Map desktop app");
+      }
       return err("STORAGE_ERROR", "Storage operation failed");
     }
   }

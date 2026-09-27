@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import Database from "better-sqlite3";
 import { type BetterSQLite3Database, drizzle } from "drizzle-orm/better-sqlite3";
@@ -43,9 +43,18 @@ function configure(sqlite: Database.Database): SqliteHandle {
  * The desktop app is the single migration owner (ARCHITECTURE §16, ADR-010).
  */
 export function openDesktopDatabase(file: string): SqliteHandle {
-  mkdirSync(dirname(file), { recursive: true });
+  const dataHome = dirname(file);
+  mkdirSync(dataHome, { recursive: true });
+  // A 0-byte file is a legitimate empty SQLite database as far as `new Database()` is concerned,
+  // so a genuinely missing file and a truncated/interrupted one look identical unless checked
+  // here — silently treating the latter as "first launch" would erase whatever produced it.
+  if (existsSync(file) && statSync(file).size === 0) {
+    throw new Error(
+      "Database file exists but is empty (interrupted write or restore). Refusing to silently start fresh.",
+    );
+  }
   const handle = configure(new Database(file));
-  closingOnError(handle.sqlite, () => runMigrations(handle.sqlite));
+  closingOnError(handle.sqlite, () => runMigrations(handle.sqlite, dataHome));
   return handle;
 }
 

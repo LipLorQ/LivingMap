@@ -16,13 +16,22 @@ const toToolResult = (result: Result<unknown>): CallToolResult => ({
   isError: !result.ok,
 });
 
-export function createLivingMapMcpServer(resolveBackend: () => McpBackend, version: string): McpServer {
+export function createLivingMapMcpServer(
+  resolveBackend: () => McpBackend,
+  invalidateBackend: () => void,
+  version: string,
+): McpServer {
   const server = new McpServer({ name: "living-map", version });
 
   // Tool handler path: MCP input → Zod (SDK, contract schema) → capability policy → application → typed result.
   const run = (use: (app: Application) => Result<unknown>): CallToolResult => {
     const backend = resolveBackend();
-    return toToolResult(backend.status === "ready" ? use(backend.app) : err("SCHEMA_INCOMPATIBLE", backend.reason));
+    if (backend.status !== "ready") return toToolResult(err("SCHEMA_INCOMPATIBLE", backend.reason));
+    const result = use(backend.app);
+    // A per-write schema check (ADR-0003) just failed on a connection we thought was ready —
+    // drop it instead of repeating the same stale error on every subsequent call.
+    if (!result.ok && result.error.code === "SCHEMA_INCOMPATIBLE") invalidateBackend();
+    return toToolResult(result);
   };
 
   server.registerTool(

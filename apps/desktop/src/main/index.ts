@@ -16,19 +16,28 @@ import { registerIpcHandlers } from "./ipc";
 import { watchStateRevision } from "./revision-watcher";
 import { createMainWindow, isTrustedRendererFrame } from "./window";
 
+/**
+ * Distinguishes storage failure modes for the user-facing dialog (never a raw stack trace or
+ * local path). Whichever branch fires, the app exits without touching the existing file — never
+ * silently replacing a broken existing database with a new empty one.
+ */
+function describeOpenFailure(message: string): string {
+  if (/newer than this app/.test(message)) {
+    return "The data was created by a newer version of Living Map. Please update the app.";
+  }
+  if (/not a database|malformed|file is encrypted|exists but is empty/i.test(message)) {
+    return "Living Map's local data appears to be damaged. A backup may be available under the app's backups folder; see logs for details.";
+  }
+  return "Living Map could not open its local data. See logs for details.";
+}
+
 function openDatabaseOrExit(): SqliteHandle | undefined {
   try {
     return openDesktopDatabase(databaseFile(resolveDataHome()));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[living-map] cannot open database: ${message}`);
-    // Controlled failure: no stack traces or local paths in the dialog.
-    dialog.showErrorBox(
-      "Living Map",
-      /newer than this app/.test(message)
-        ? "The data was created by a newer version of Living Map. Please update the app."
-        : "Living Map could not open its local data. See logs for details.",
-    );
+    dialog.showErrorBox("Living Map", describeOpenFailure(message));
     app.exit(1);
     return undefined;
   }
