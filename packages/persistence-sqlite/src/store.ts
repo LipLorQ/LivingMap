@@ -1,37 +1,240 @@
-import {
-  type IdGenerator,
-  type ProbeReader,
-  type ProbeRepository,
-  SchemaConflictError,
-  type Store,
+import type {
+  ActionReader,
+  ActionRepository,
+  ChangeLogReader,
+  GoodLifeConditionReader,
+  GoodLifeConditionRepository,
+  IdGenerator,
+  IntentionReader,
+  IntentionRepository,
+  SeasonReader,
+  SeasonRepository,
+  StageReader,
+  StageRepository,
+  Store,
 } from "@living-map/application";
-import type { Probe } from "@living-map/domain";
-import { and, asc, eq, sql } from "drizzle-orm";
+import { SchemaConflictError } from "@living-map/application";
+import type { Action, ActionStatus, GoodLifeCondition, Instant, Intention, Season, Stage } from "@living-map/domain";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import type { Db, SqliteHandle } from "./connection";
 import { EXPECTED_SCHEMA_VERSION } from "./migrate";
-import { changeLog, meta, probes } from "./schema";
+import { actions, changeLog, goodLifeConditions, intentions, meta, season, stages } from "./schema";
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
+type ActionRow = typeof actions.$inferSelect;
 
-function probeReader(q: Tx): ProbeReader {
+function rowToAction(row: ActionRow): Action {
   return {
-    findById: (id) => q.select().from(probes).where(eq(probes.id, id)).get(),
-    list: () => q.select().from(probes).orderBy(asc(probes.createdAt), asc(probes.id)).all(),
+    id: row.id,
+    stageId: row.stageId,
+    title: row.title,
+    doneWhen: row.doneWhen,
+    position: row.position,
+    status: row.status as ActionStatus,
+    blocker:
+      row.status === "blocked" ? { reason: row.blockerReason as string, blockedAt: row.blockedAt as Instant } : null,
+    version: row.version,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    completedAt: row.completedAt,
   };
 }
 
-function probeRepository(q: Tx): ProbeRepository {
+function actionToRow(action: Action): ActionRow {
   return {
-    ...probeReader(q),
-    insert: (probe: Probe) => {
-      q.insert(probes).values(probe).run();
-    },
-    updateIfVersion: (probe, expectedVersion) =>
+    id: action.id,
+    stageId: action.stageId,
+    title: action.title,
+    doneWhen: action.doneWhen,
+    position: action.position,
+    status: action.status,
+    blockerReason: action.blocker?.reason ?? null,
+    blockedAt: action.blocker?.blockedAt ?? null,
+    completedAt: action.completedAt,
+    version: action.version,
+    createdAt: action.createdAt,
+    updatedAt: action.updatedAt,
+  };
+}
+
+function seasonReader(q: Tx): SeasonReader {
+  return { get: () => q.select().from(season).limit(1).get() };
+}
+
+function seasonRepository(q: Tx): SeasonRepository {
+  return {
+    ...seasonReader(q),
+    insert: (s: Season) => void q.insert(season).values(s).run(),
+    updateIfVersion: (s, expectedVersion) =>
       q
-        .update(probes)
-        .set({ title: probe.title, version: probe.version, updatedAt: probe.updatedAt })
-        .where(and(eq(probes.id, probe.id), eq(probes.version, expectedVersion)))
+        .update(season)
+        .set({ focus: s.focus, version: s.version, updatedAt: s.updatedAt })
+        .where(and(eq(season.id, s.id), eq(season.version, expectedVersion)))
         .run().changes === 1,
+  };
+}
+
+function goodLifeConditionReader(q: Tx): GoodLifeConditionReader {
+  return {
+    findById: (id) => q.select().from(goodLifeConditions).where(eq(goodLifeConditions.id, id)).get(),
+    list: () => q.select().from(goodLifeConditions).orderBy(asc(goodLifeConditions.position)).all(),
+  };
+}
+
+function goodLifeConditionRepository(q: Tx): GoodLifeConditionRepository {
+  return {
+    ...goodLifeConditionReader(q),
+    insert: (c: GoodLifeCondition) => void q.insert(goodLifeConditions).values(c).run(),
+    updateIfVersion: (c, expectedVersion) =>
+      q
+        .update(goodLifeConditions)
+        .set({ text: c.text, version: c.version, updatedAt: c.updatedAt })
+        .where(and(eq(goodLifeConditions.id, c.id), eq(goodLifeConditions.version, expectedVersion)))
+        .run().changes === 1,
+    removeIfVersion: (id, expectedVersion) =>
+      q
+        .delete(goodLifeConditions)
+        .where(and(eq(goodLifeConditions.id, id), eq(goodLifeConditions.version, expectedVersion)))
+        .run().changes === 1,
+    // ponytail: one UPDATE per item (shared by all three reorder() implementations below); O(n)
+    // round trips per reorder, fine for realistic list sizes (dozens). Switch to a single
+    // batched/CASE-based statement if reordering becomes hot on large lists.
+    reorder: (positions, now) => {
+      for (const [id, position] of positions) {
+        q.update(goodLifeConditions)
+          .set({ position, version: sql`${goodLifeConditions.version} + 1`, updatedAt: now })
+          .where(eq(goodLifeConditions.id, id))
+          .run();
+      }
+    },
+  };
+}
+
+function intentionReader(q: Tx): IntentionReader {
+  return {
+    findById: (id) => q.select().from(intentions).where(eq(intentions.id, id)).get(),
+    list: () => q.select().from(intentions).orderBy(asc(intentions.createdAt)).all(),
+  };
+}
+
+function intentionRepository(q: Tx): IntentionRepository {
+  return {
+    ...intentionReader(q),
+    insert: (i: Intention) => void q.insert(intentions).values(i).run(),
+    updateIfVersion: (i, expectedVersion) =>
+      q
+        .update(intentions)
+        .set({ title: i.title, desiredResult: i.desiredResult, version: i.version, updatedAt: i.updatedAt })
+        .where(and(eq(intentions.id, i.id), eq(intentions.version, expectedVersion)))
+        .run().changes === 1,
+  };
+}
+
+function stageReader(q: Tx): StageReader {
+  return {
+    findById: (id) => q.select().from(stages).where(eq(stages.id, id)).get(),
+    listByIntention: (intentionId) =>
+      q.select().from(stages).where(eq(stages.intentionId, intentionId)).orderBy(asc(stages.position)).all(),
+  };
+}
+
+function stageRepository(q: Tx): StageRepository {
+  return {
+    ...stageReader(q),
+    insert: (stage: Stage) => void q.insert(stages).values(stage).run(),
+    updateIfVersion: (stage, expectedVersion) =>
+      q
+        .update(stages)
+        .set({ title: stage.title, version: stage.version, updatedAt: stage.updatedAt })
+        .where(and(eq(stages.id, stage.id), eq(stages.version, expectedVersion)))
+        .run().changes === 1,
+    reorder: (positions, now) => {
+      for (const [id, position] of positions) {
+        q.update(stages)
+          .set({ position, version: sql`${stages.version} + 1`, updatedAt: now })
+          .where(eq(stages.id, id))
+          .run();
+      }
+    },
+    setCurrent: (intentionId, stageId, now) => {
+      // Two statements, each touching only the rows whose flag actually flips, so version/updatedAt
+      // bump exactly where something changed (ARCHITECTURE §13) instead of a blind overwrite.
+      q.update(stages)
+        .set({ isCurrent: false, version: sql`${stages.version} + 1`, updatedAt: now })
+        .where(and(eq(stages.intentionId, intentionId), eq(stages.isCurrent, true), sql`${stages.id} != ${stageId}`))
+        .run();
+      q.update(stages)
+        .set({ isCurrent: true, version: sql`${stages.version} + 1`, updatedAt: now })
+        .where(and(eq(stages.id, stageId), eq(stages.isCurrent, false)))
+        .run();
+    },
+  };
+}
+
+function actionReader(q: Tx): ActionReader {
+  return {
+    findById: (id) => {
+      const row = q.select().from(actions).where(eq(actions.id, id)).get();
+      return row ? rowToAction(row) : undefined;
+    },
+    listByStage: (stageId) =>
+      q
+        .select()
+        .from(actions)
+        .where(eq(actions.stageId, stageId))
+        .orderBy(asc(actions.position))
+        .all()
+        .map(rowToAction),
+    listByStages: (stageIds) =>
+      stageIds.length === 0
+        ? []
+        : q
+            .select()
+            .from(actions)
+            .where(inArray(actions.stageId, stageIds as string[]))
+            .orderBy(asc(actions.position))
+            .all()
+            .map(rowToAction),
+  };
+}
+
+function actionRepository(q: Tx): ActionRepository {
+  return {
+    ...actionReader(q),
+    insert: (action: Action) => void q.insert(actions).values(actionToRow(action)).run(),
+    updateIfVersion: (action, expectedVersion) => {
+      const row = actionToRow(action);
+      return (
+        q
+          .update(actions)
+          .set({
+            title: row.title,
+            doneWhen: row.doneWhen,
+            status: row.status,
+            blockerReason: row.blockerReason,
+            blockedAt: row.blockedAt,
+            completedAt: row.completedAt,
+            version: row.version,
+            updatedAt: row.updatedAt,
+          })
+          .where(and(eq(actions.id, action.id), eq(actions.version, expectedVersion)))
+          .run().changes === 1
+      );
+    },
+    reorder: (positions, now) => {
+      for (const [id, position] of positions) {
+        q.update(actions)
+          .set({ position, version: sql`${actions.version} + 1`, updatedAt: now })
+          .where(eq(actions.id, id))
+          .run();
+      }
+    },
+  };
+}
+
+function changeLogReader(q: Tx): ChangeLogReader {
+  return {
+    listRecent: (limit) => q.select().from(changeLog).orderBy(desc(changeLog.stateRevision)).limit(limit).all(),
   };
 }
 
@@ -51,9 +254,19 @@ export function createSqliteStore(handle: SqliteHandle, ids: IdGenerator): Store
   return {
     // DEFERRED: a consistent WAL snapshot for multi-statement reads, never blocks writers.
     read: (work) =>
-      db.transaction((tx) => work({ probes: probeReader(tx), stateRevision: () => readRevision(tx) }), {
-        behavior: "deferred",
-      }),
+      db.transaction(
+        (tx) =>
+          work({
+            season: seasonReader(tx),
+            goodLifeConditions: goodLifeConditionReader(tx),
+            intentions: intentionReader(tx),
+            stages: stageReader(tx),
+            actions: actionReader(tx),
+            changeLog: changeLogReader(tx),
+            stateRevision: () => readRevision(tx),
+          }),
+        { behavior: "deferred" },
+      ),
 
     // IMMEDIATE: take the write lock up front (waiting up to busy_timeout). A deferred
     // read→write upgrade in WAL fails instantly with SQLITE_BUSY when another process committed.
@@ -69,7 +282,11 @@ export function createSqliteStore(handle: SqliteHandle, ids: IdGenerator): Store
           const changesBefore = totalChanges();
           let recorded = false;
           const result = work({
-            probes: probeRepository(tx),
+            season: seasonRepository(tx),
+            goodLifeConditions: goodLifeConditionRepository(tx),
+            intentions: intentionRepository(tx),
+            stages: stageRepository(tx),
+            actions: actionRepository(tx),
             recordChange: (change) => {
               recorded = true;
               const row = tx

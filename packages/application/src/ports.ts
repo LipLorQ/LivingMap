@@ -1,4 +1,13 @@
-import type { EntityId, Instant, Probe, Version } from "@living-map/domain";
+import type {
+  Action,
+  EntityId,
+  GoodLifeCondition,
+  Instant,
+  Intention,
+  Season,
+  Stage,
+  Version,
+} from "@living-map/domain";
 
 export interface Clock {
   now(): Instant;
@@ -8,18 +17,68 @@ export interface IdGenerator {
   next(): EntityId;
 }
 
-export interface ProbeReader {
-  findById(id: EntityId): Probe | undefined;
-  list(): Probe[];
+export interface SeasonReader {
+  get(): Season | undefined;
 }
 
-export interface ProbeRepository extends ProbeReader {
-  insert(probe: Probe): void;
+export interface SeasonRepository extends SeasonReader {
+  insert(season: Season): void;
+  /** Persists only if the stored version still equals `expectedVersion`; false otherwise. */
+  updateIfVersion(season: Season, expectedVersion: Version): boolean;
+}
+
+export interface GoodLifeConditionReader {
+  findById(id: EntityId): GoodLifeCondition | undefined;
+  list(): GoodLifeCondition[];
+}
+
+export interface GoodLifeConditionRepository extends GoodLifeConditionReader {
+  insert(condition: GoodLifeCondition): void;
+  updateIfVersion(condition: GoodLifeCondition, expectedVersion: Version): boolean;
+  removeIfVersion(id: EntityId, expectedVersion: Version): boolean;
+  /** Manual reorder (this stage's prompt §13): a full-list position replace, not a strategic plan. */
+  reorder(positions: ReadonlyMap<EntityId, number>, now: Instant): void;
+}
+
+export interface IntentionReader {
+  findById(id: EntityId): Intention | undefined;
+  /** At most one row exists in this stage; multi-Intention UX is future work (ARCHITECTURE-approved). */
+  list(): Intention[];
+}
+
+export interface IntentionRepository extends IntentionReader {
+  insert(intention: Intention): void;
+  updateIfVersion(intention: Intention, expectedVersion: Version): boolean;
+}
+
+export interface StageReader {
+  findById(id: EntityId): Stage | undefined;
+  listByIntention(intentionId: EntityId): Stage[];
+}
+
+export interface StageRepository extends StageReader {
+  insert(stage: Stage): void;
+  updateIfVersion(stage: Stage, expectedVersion: Version): boolean;
+  reorder(positions: ReadonlyMap<EntityId, number>, now: Instant): void;
   /**
-   * Persists `probe` only if the stored version still equals `expectedVersion`.
-   * Returns false (and writes nothing) otherwise — the storage-level guard against lost updates.
+   * Sets exactly one Stage of `intentionId` current, atomically, keeping the invariant unambiguous.
+   * Bumps version/updatedAt only on the rows whose `isCurrent` flag actually changes — this is a
+   * selection, not a content edit, so it does not require an `expectedVersion` from the caller.
    */
-  updateIfVersion(probe: Probe, expectedVersion: Version): boolean;
+  setCurrent(intentionId: EntityId, stageId: EntityId, now: Instant): void;
+}
+
+export interface ActionReader {
+  findById(id: EntityId): Action | undefined;
+  listByStage(stageId: EntityId): Action[];
+  /** Batched form of `listByStage` for views spanning every Stage of an Intention (avoids N+1). */
+  listByStages(stageIds: readonly EntityId[]): Action[];
+}
+
+export interface ActionRepository extends ActionReader {
+  insert(action: Action): void;
+  updateIfVersion(action: Action, expectedVersion: Version): boolean;
+  reorder(positions: ReadonlyMap<EntityId, number>, now: Instant): void;
 }
 
 /** Lightweight change-log entry (ARCHITECTURE §20); actor / correlation come from the command context. */
@@ -30,13 +89,34 @@ export type ChangeRecord = {
   summary: string;
 };
 
+/** A stored change-log row, as read back for the product-facing history query. */
+export type ChangeLogEntry = ChangeRecord & {
+  id: EntityId;
+  timestamp: Instant;
+  actor: string;
+  stateRevision: number;
+};
+
+export interface ChangeLogReader {
+  listRecent(limit: number): ChangeLogEntry[];
+}
+
 export interface ReadScope {
-  probes: ProbeReader;
+  season: SeasonReader;
+  goodLifeConditions: GoodLifeConditionReader;
+  intentions: IntentionReader;
+  stages: StageReader;
+  actions: ActionReader;
+  changeLog: ChangeLogReader;
   stateRevision(): number;
 }
 
 export interface WriteScope {
-  probes: ProbeRepository;
+  season: SeasonRepository;
+  goodLifeConditions: GoodLifeConditionRepository;
+  intentions: IntentionRepository;
+  stages: StageRepository;
+  actions: ActionRepository;
   /** Increments `state_revision`, appends to change log, returns the new revision. */
   recordChange(change: ChangeRecord): number;
 }

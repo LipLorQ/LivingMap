@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Application, createApplication } from "@living-map/application";
-import type { ProbeDto, Result } from "@living-map/contracts";
+import type { Result } from "@living-map/contracts";
 import {
   createSqliteStore,
   databaseFile,
@@ -71,14 +71,8 @@ async function call<T>(client: Client, name: string, args: Record<string, unknow
   }
 }
 
-function createProbe(app: Application, title: string): ProbeDto {
-  const r = app.commands.createProbe(app.newContext("user-ui", "test"), { title });
-  if (!r.ok) throw new Error(r.error.message);
-  return r.value;
-}
-
 describe("MCP surface", () => {
-  it("exposes exactly the whitelisted tools and no raw SQL / filesystem / shell tool", async () => {
+  it("exposes exactly the whitelisted (read-only) tools — no product-domain writes yet (this stage's prompt §2/§19)", async () => {
     openDesktop();
     const client = await spawnMcp();
     const names = (await client.listTools()).tools.map((t) => t.name).sort();
@@ -87,19 +81,10 @@ describe("MCP surface", () => {
 
     const unknown = await client.callTool({ name: "execute_sql", arguments: { sql: "select 1" } });
     expect(unknown.isError).toBe(true);
-    const create = await client.callTool({ name: "create_probe", arguments: { title: "x" } });
-    expect(create.isError).toBe(true);
-  });
-
-  it("validates tool input with the contract schema (unknown keys, missing expectedVersion)", async () => {
-    const app = openDesktop();
-    const probe = createProbe(app, "a");
-    const client = await spawnMcp();
-    expect(await call(client, "rename_probe", { id: probe.id, title: "b" })).toMatchObject({ ok: false });
-    expect(
-      await call(client, "rename_probe", { id: probe.id, title: "b", expectedVersion: 1, sql: "drop table probes" }),
-    ).toMatchObject({ ok: false });
-    expect(app.queries.getProbe({ id: probe.id })).toMatchObject({ value: { title: "a", version: 1 } });
+    for (const forbidden of ["create_intention", "complete_action", "add_stage"]) {
+      const r = await client.callTool({ name: forbidden, arguments: {} });
+      expect(r.isError).toBe(true);
+    }
   });
 
   it("a corrupted database file fails the tool call gracefully instead of crashing the MCP process", async () => {
@@ -107,7 +92,7 @@ describe("MCP surface", () => {
     writeFileSync(databaseFile(home), "not a valid sqlite file, just garbage bytes");
 
     const client = await spawnMcp();
-    const result = await call(client, "list_probes");
+    const result = await call(client, "get_state_revision");
     expect(result).toMatchObject({ ok: false });
     // The process is still alive and answers further calls (would hang/reject if it had crashed).
     expect(await call(client, "get_state_revision")).toMatchObject({ ok: false });
@@ -115,115 +100,37 @@ describe("MCP surface", () => {
 
   it("refuses to serve (SCHEMA_INCOMPATIBLE) without creating the DB, then recovers once desktop has run", async () => {
     const client = await spawnMcp();
-    expect(await call(client, "list_probes")).toMatchObject({ ok: false, error: { code: "SCHEMA_INCOMPATIBLE" } });
+    expect(await call(client, "get_state_revision")).toMatchObject({
+      ok: false,
+      error: { code: "SCHEMA_INCOMPATIBLE" },
+    });
     expect(existsSync(databaseFile(home))).toBe(false);
 
-    const probe = createProbe(openDesktop(), "after desktop start");
-    expect(await call(client, "list_probes")).toEqual({ ok: true, value: [probe] });
+    openDesktop();
+    expect(await call(client, "get_state_revision")).toEqual({ ok: true, value: { stateRevision: 0 } });
   });
 });
 
 describe("desktop + separate MCP process share one SQLite", () => {
-  it("both processes read the same data and revision", async () => {
+  it("both processes see the same state_revision after a desktop write to the real domain", async () => {
     const app = openDesktop();
-    const probe = createProbe(app, "hello from desktop");
+    const created = app.commands.createSeason(app.newContext("user-ui", "test"), { focus: "hello from desktop" });
+    if (!created.ok) throw new Error(created.error.message);
     const client = await spawnMcp();
 
-    expect(await call<ProbeDto[]>(client, "list_probes")).toEqual({ ok: true, value: [probe] });
     expect(await call(client, "get_state_revision")).toEqual({ ok: true, value: { stateRevision: 1 } });
-    expect(app.queries.listProbes()).toEqual({ ok: true, value: [probe] });
+    expect(app.queries.getStateRevision()).toEqual({ ok: true, value: { stateRevision: 1 } });
   });
 
-  it("cross-process optimistic concurrency in both directions", async () => {
+  it("MCP observes further desktop writes without restarting", async () => {
     const app = openDesktop();
-    const { id } = createProbe(app, "v1");
     const client = await spawnMcp();
+    expect(await call(client, "get_state_revision")).toEqual({ ok: true, value: { stateRevision: 0 } });
 
-    // Both saw v1. MCP writes first → wins. Desktop's stale write → CONFLICT_RELOAD.
-    expect(await call(client, "rename_probe", { id, expectedVersion: 1, title: "mcp" })).toMatchObject({
-      ok: true,
-      value: { version: 2 },
-    });
-    expect(
-      app.commands.renameProbe(app.newContext("user-ui", "test"), { id, expectedVersion: 1, title: "ui" }),
-    ).toMatchObject({
-      ok: false,
-      error: { code: "CONFLICT_RELOAD" },
-    });
+    const created = app.commands.createSeason(app.newContext("user-ui", "test"), { focus: "x" });
+    if (!created.ok) throw new Error(created.error.message);
+    app.commands.updateSeasonFocus(app.newContext("user-ui", "test"), { expectedVersion: 1, focus: "y" });
 
-    // Desktop reloads (v2) and writes → wins. MCP's stale write → CONFLICT_RELOAD.
-    expect(
-      app.commands.renameProbe(app.newContext("user-ui", "test"), { id, expectedVersion: 2, title: "ui" }),
-    ).toMatchObject({
-      ok: true,
-      value: { version: 3 },
-    });
-    expect(await call(client, "rename_probe", { id, expectedVersion: 2, title: "mcp stale" })).toMatchObject({
-      ok: false,
-      error: { code: "CONFLICT_RELOAD" },
-    });
-
-    expect(await call(client, "get_probe", { id })).toMatchObject({ ok: true, value: { title: "ui", version: 3 } });
-    expect(app.queries.getStateRevision()).toEqual({ ok: true, value: { stateRevision: 3 } });
-  });
-
-  it("stress: desktop + 2 MCP processes hammer one aggregate — no stale overwrite, no lost update, no SQLITE_BUSY leak", async () => {
-    const WRITES_PER_WRITER = 40;
-    const app = openDesktop();
-    const { id } = createProbe(app, "counter");
-    const mcpA = await spawnMcp();
-    const mcpB = await spawnMcp();
-    const stats = { conflicts: 0, otherErrors: [] as string[], overwrites: [] as string[] };
-    // A successful write must be based on exactly the version it read; anything else is a stale overwrite.
-    const accept = (seenVersion: number, r: Result<ProbeDto>) => {
-      if (r.ok && r.value.version !== seenVersion + 1) stats.overwrites.push(`v${seenVersion}→v${r.value.version}`);
-    };
-
-    async function mcpWriter(client: Client, tag: string) {
-      for (let done = 0; done < WRITES_PER_WRITER; ) {
-        const seen = await call<ProbeDto>(client, "get_probe", { id });
-        if (!seen.ok) throw new Error(seen.error.code);
-        const r = await call<ProbeDto>(client, "rename_probe", {
-          id,
-          expectedVersion: seen.value.version,
-          title: `${tag}-${done}`,
-        });
-        accept(seen.value.version, r);
-        if (r.ok) done++;
-        else if (r.error.code === "CONFLICT_RELOAD") stats.conflicts++;
-        else stats.otherErrors.push(r.error.code);
-      }
-    }
-
-    async function desktopWriter() {
-      for (let done = 0; done < WRITES_PER_WRITER; ) {
-        const seen = app.queries.getProbe({ id });
-        if (!seen.ok) throw new Error(seen.error.code);
-        await new Promise((r) => setTimeout(r, Math.random() * 3)); // let the other processes interleave
-        const r = app.commands.renameProbe(app.newContext("user-ui", "test"), {
-          id,
-          expectedVersion: seen.value.version,
-          title: `ui-${done}`,
-        });
-        accept(seen.value.version, r);
-        if (r.ok) done++;
-        else if (r.error.code === "CONFLICT_RELOAD") stats.conflicts++;
-        else stats.otherErrors.push(r.error.code);
-      }
-    }
-
-    await Promise.all([mcpWriter(mcpA, "A"), mcpWriter(mcpB, "B"), desktopWriter()]);
-
-    const total = 3 * WRITES_PER_WRITER;
-    expect(stats.otherErrors).toEqual([]);
-    expect(stats.overwrites).toEqual([]);
-    expect(stats.conflicts).toBeGreaterThan(0); // the race window was actually exercised
-    expect(app.queries.getProbe({ id })).toMatchObject({ ok: true, value: { version: 1 + total } });
-    expect(app.queries.getStateRevision()).toEqual({ ok: true, value: { stateRevision: 1 + total } });
-    const renames = desktopHandle?.sqlite
-      .prepare("select count(*) as n from change_log where command_type = 'probe.rename'")
-      .get() as { n: number };
-    expect(renames.n).toBe(total);
-    console.info(`[stress] ${total} successful writes, ${stats.conflicts} CONFLICT_RELOAD retries, 0 stale overwrites`);
+    expect(await call(client, "get_state_revision")).toEqual({ ok: true, value: { stateRevision: 2 } });
   });
 });

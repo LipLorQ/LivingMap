@@ -1,18 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { AppErrorSchema, RenameProbeInputSchema } from "../src";
+import { AppErrorSchema, EditGoodLifeConditionInputSchema } from "../src";
 import { IPC_CHANNELS } from "../src/ipc";
 
 const ID = "0192f5a0-0000-7000-8000-000000000001";
 
 describe("contracts", () => {
-  it("rename input requires expectedVersion and rejects unknown keys", () => {
-    expect(RenameProbeInputSchema.safeParse({ id: ID, title: "x" }).success).toBe(false);
-    expect(RenameProbeInputSchema.safeParse({ id: ID, title: "x", expectedVersion: 1, sql: "drop" }).success).toBe(
-      false,
-    );
-    expect(RenameProbeInputSchema.safeParse({ id: ID, title: " x ", expectedVersion: 1 })).toMatchObject({
+  it("edit input requires expectedVersion and rejects unknown keys", () => {
+    expect(EditGoodLifeConditionInputSchema.safeParse({ id: ID, text: "x" }).success).toBe(false);
+    expect(
+      EditGoodLifeConditionInputSchema.safeParse({ id: ID, text: "x", expectedVersion: 1, sql: "drop" }).success,
+    ).toBe(false);
+    expect(EditGoodLifeConditionInputSchema.safeParse({ id: ID, text: " x ", expectedVersion: 1 })).toMatchObject({
       success: true,
-      data: { title: "x" },
+      data: { text: "x" },
     });
   });
 

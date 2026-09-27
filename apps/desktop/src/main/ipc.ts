@@ -1,10 +1,26 @@
 import type { Application } from "@living-map/application";
 import {
-  CreateProbeInputSchema,
+  AddActionInputSchema,
+  AddGoodLifeConditionInputSchema,
+  AddStageInputSchema,
+  BlockActionInputSchema,
+  CompleteActionInputSchema,
+  CreateIntentionInputSchema,
+  CreateSeasonInputSchema,
+  EditActionInputSchema,
+  EditGoodLifeConditionInputSchema,
+  EditStageInputSchema,
   err,
-  GetProbeInputSchema,
-  RenameProbeInputSchema,
+  ListChangeHistoryInputSchema,
+  RemoveGoodLifeConditionInputSchema,
+  ReorderActionsInputSchema,
+  ReorderGoodLifeConditionsInputSchema,
+  ReorderStagesInputSchema,
   type Result,
+  SetCurrentStageInputSchema,
+  UnblockActionInputSchema,
+  UpdateIntentionInputSchema,
+  UpdateSeasonFocusInputSchema,
 } from "@living-map/contracts";
 import { IPC_CHANNELS } from "@living-map/contracts/ipc";
 import { ipcMain, type WebFrameMain } from "electron";
@@ -35,8 +51,45 @@ export function registerIpcHandlers(app: Application, isTrusted: TrustCheck): vo
   const ui = () => app.newContext("user-ui", "ipc");
 
   handle(IPC_CHANNELS.getStateRevision, null, () => app.queries.getStateRevision());
-  handle(IPC_CHANNELS.listProbes, null, () => app.queries.listProbes());
-  handle(IPC_CHANNELS.getProbe, GetProbeInputSchema, (input) => app.queries.getProbe(input));
-  handle(IPC_CHANNELS.createProbe, CreateProbeInputSchema, (input) => app.commands.createProbe(ui(), input));
-  handle(IPC_CHANNELS.renameProbe, RenameProbeInputSchema, (input) => app.commands.renameProbe(ui(), input));
+  handle(IPC_CHANNELS.getCurrentView, null, () => app.queries.getCurrentView());
+  handle(IPC_CHANNELS.listChangeHistory, ListChangeHistoryInputSchema, (input) => app.queries.listChangeHistory(input));
+
+  handle(IPC_CHANNELS.createSeason, CreateSeasonInputSchema, (input) => app.commands.createSeason(ui(), input));
+  handle(IPC_CHANNELS.updateSeasonFocus, UpdateSeasonFocusInputSchema, (input) =>
+    app.commands.updateSeasonFocus(ui(), input),
+  );
+
+  handle(IPC_CHANNELS.addGoodLifeCondition, AddGoodLifeConditionInputSchema, (input) =>
+    app.commands.addGoodLifeCondition(ui(), input),
+  );
+  handle(IPC_CHANNELS.editGoodLifeCondition, EditGoodLifeConditionInputSchema, (input) =>
+    app.commands.editGoodLifeCondition(ui(), input),
+  );
+  handle(IPC_CHANNELS.removeGoodLifeCondition, RemoveGoodLifeConditionInputSchema, (input) =>
+    app.commands.removeGoodLifeCondition(ui(), input),
+  );
+  handle(IPC_CHANNELS.reorderGoodLifeConditions, ReorderGoodLifeConditionsInputSchema, (input) =>
+    app.commands.reorderGoodLifeConditions(ui(), input),
+  );
+
+  handle(IPC_CHANNELS.createIntention, CreateIntentionInputSchema, (input) =>
+    app.commands.createIntention(ui(), input),
+  );
+  handle(IPC_CHANNELS.updateIntention, UpdateIntentionInputSchema, (input) =>
+    app.commands.updateIntention(ui(), input),
+  );
+
+  handle(IPC_CHANNELS.addStage, AddStageInputSchema, (input) => app.commands.addStage(ui(), input));
+  handle(IPC_CHANNELS.editStage, EditStageInputSchema, (input) => app.commands.editStage(ui(), input));
+  handle(IPC_CHANNELS.reorderStages, ReorderStagesInputSchema, (input) => app.commands.reorderStages(ui(), input));
+  handle(IPC_CHANNELS.setCurrentStage, SetCurrentStageInputSchema, (input) =>
+    app.commands.setCurrentStage(ui(), input),
+  );
+
+  handle(IPC_CHANNELS.addAction, AddActionInputSchema, (input) => app.commands.addAction(ui(), input));
+  handle(IPC_CHANNELS.editAction, EditActionInputSchema, (input) => app.commands.editAction(ui(), input));
+  handle(IPC_CHANNELS.completeAction, CompleteActionInputSchema, (input) => app.commands.completeAction(ui(), input));
+  handle(IPC_CHANNELS.blockAction, BlockActionInputSchema, (input) => app.commands.blockAction(ui(), input));
+  handle(IPC_CHANNELS.unblockAction, UnblockActionInputSchema, (input) => app.commands.unblockAction(ui(), input));
+  handle(IPC_CHANNELS.reorderActions, ReorderActionsInputSchema, (input) => app.commands.reorderActions(ui(), input));
 }

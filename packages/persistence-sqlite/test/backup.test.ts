@@ -51,38 +51,38 @@ describe("manual backup + restore (mandatory Stage 1 integration test)", () => {
     const h = desktop();
     const app = appOn(h);
 
-    const probe = app.commands.createProbe(app.newContext("user-ui", "test"), { title: "state A" });
-    if (!probe.ok) throw new Error(probe.error.message);
+    const season = app.commands.createSeason(app.newContext("user-ui", "test"), { focus: "state A" });
+    if (!season.ok) throw new Error(season.error.message);
 
     const backupFile = createBackup(h.sqlite, home, "manual");
     expect(existsSync(backupFile)).toBe(true);
 
-    const renamed = app.commands.renameProbe(app.newContext("user-ui", "test"), {
-      id: probe.value.id,
+    const updated = app.commands.updateSeasonFocus(app.newContext("user-ui", "test"), {
       expectedVersion: 1,
-      title: "state B",
+      focus: "state B",
     });
-    expect(renamed.ok).toBe(true);
-    expect(app.queries.getProbe({ id: probe.value.id })).toMatchObject({ value: { title: "state B" } });
+    expect(updated.ok).toBe(true);
+    expect(app.queries.getSeason()).toMatchObject({ value: { focus: "state B" } });
 
     h.close();
     handle = undefined;
 
     restoreBackup(home, backupFile);
 
-    const reopened = desktop();
-    const reopenedApp = appOn(reopened);
-    expect(reopenedApp.queries.getProbe({ id: probe.value.id })).toMatchObject({
-      ok: true,
-      value: { title: "state A", version: 1 },
-    });
+    const reopenedApp = appOn(desktop());
+    expect(reopenedApp.queries.getSeason()).toMatchObject({ ok: true, value: { focus: "state A", version: 1 } });
   });
 
   it("is a consistent snapshot: VACUUM INTO output opens and reads correctly under WAL", () => {
     const h = desktop();
     const app = appOn(h);
+    const ui = app.newContext("user-ui", "test");
+    const intention = app.commands.createIntention(ui, { title: "x", desiredResult: "" });
+    if (!intention.ok) throw new Error(intention.error.message);
+    const stage = app.commands.addStage(ui, { intentionId: intention.value.id, title: "s" });
+    if (!stage.ok) throw new Error(stage.error.message);
     for (let i = 0; i < 5; i++) {
-      const r = app.commands.createProbe(app.newContext("user-ui", "test"), { title: `probe-${i}` });
+      const r = app.commands.addAction(ui, { stageId: stage.value.id, title: `action-${i}`, doneWhen: "" });
       if (!r.ok) throw new Error(r.error.message);
     }
     const backupFile = createBackup(h.sqlite, home, "manual");
@@ -90,23 +90,22 @@ describe("manual backup + restore (mandatory Stage 1 integration test)", () => {
     handle = undefined;
 
     restoreBackup(home, backupFile);
-    const list = appOn(desktop()).queries.listProbes();
-    if (!list.ok) throw new Error("expected ok");
-    expect(list.value).toHaveLength(5);
+    const view = appOn(desktop()).queries.getCurrentView();
+    if (!view.ok) throw new Error("expected ok");
+    expect(view.value.stages[0]?.actions).toHaveLength(5);
   });
 
   it("takes an un-rotated safety copy of what it replaces, so a bad restore stays recoverable", () => {
     const h = desktop();
     const app = appOn(h);
-    const probe = app.commands.createProbe(app.newContext("user-ui", "test"), { title: "state A" });
-    if (!probe.ok) throw new Error(probe.error.message);
+    const season = app.commands.createSeason(app.newContext("user-ui", "test"), { focus: "state A" });
+    if (!season.ok) throw new Error(season.error.message);
     const backupFile = createBackup(h.sqlite, home, "manual");
-    const renamed = app.commands.renameProbe(app.newContext("user-ui", "test"), {
-      id: probe.value.id,
+    const updated = app.commands.updateSeasonFocus(app.newContext("user-ui", "test"), {
       expectedVersion: 1,
-      title: "state B",
+      focus: "state B",
     });
-    if (!renamed.ok) throw new Error(renamed.error.message);
+    if (!updated.ok) throw new Error(updated.error.message);
     h.close();
     handle = undefined;
 
@@ -121,10 +120,10 @@ describe("manual backup + restore (mandatory Stage 1 integration test)", () => {
       fileMustExist: true,
     });
     try {
-      const row = safetyCopy.prepare("select title from probes where id = ?").get(probe.value.id) as
-        | { title: string }
+      const row = safetyCopy.prepare("select focus from season where id = ?").get(season.value.id) as
+        | { focus: string }
         | undefined;
-      expect(row?.title).toBe("state B");
+      expect(row?.focus).toBe("state B");
     } finally {
       safetyCopy.close();
     }
@@ -133,8 +132,8 @@ describe("manual backup + restore (mandatory Stage 1 integration test)", () => {
   it("refuses to restore over a database another connection is actively writing to", () => {
     const h = desktop();
     const app = appOn(h);
-    const probe = app.commands.createProbe(app.newContext("user-ui", "test"), { title: "x" });
-    if (!probe.ok) throw new Error(probe.error.message);
+    const season = app.commands.createSeason(app.newContext("user-ui", "test"), { focus: "x" });
+    if (!season.ok) throw new Error(season.error.message);
     const backupFile = createBackup(h.sqlite, home, "manual");
 
     // Hold an active write transaction open on this same connection — restoreBackup must refuse

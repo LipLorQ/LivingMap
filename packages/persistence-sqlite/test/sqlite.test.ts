@@ -2,6 +2,7 @@ import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApplication } from "@living-map/application";
+import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   applyMigrations,
@@ -94,51 +95,78 @@ describe("migrations ownership (ARCHITECTURE §16)", () => {
     h.close();
     expect(() => openDesktopDatabase(file)).toThrow(/newer than this app/);
   });
+
+  it("migrates cleanly from the previous real (Stage 1 / probes) schema, dropping probes and adding the domain tables", () => {
+    // Reproduce a Stage-1 database: apply only the first two migrations (schema v2, with `probes`).
+    const h = desktop();
+    h.close();
+    opened.pop();
+    const reset = new Database(file);
+    reset.pragma("foreign_keys = OFF");
+    reset.exec(
+      "DROP TABLE actions; DROP TABLE stages; DROP TABLE intentions; DROP TABLE good_life_conditions; DROP TABLE season;",
+    );
+    reset.exec(
+      "CREATE TABLE probes (id text PRIMARY KEY NOT NULL, title text NOT NULL, version integer NOT NULL, created_at text NOT NULL, updated_at text NOT NULL);",
+    );
+    reset.exec("INSERT INTO probes (id, title, version, created_at, updated_at) VALUES ('p1', 'legacy', 1, 'T', 'T');");
+    reset.pragma("user_version = 2");
+    reset.pragma("foreign_keys = ON");
+    reset.close();
+
+    const migrated = desktop();
+    expect(migrated.sqlite.pragma("user_version", { simple: true })).toBe(EXPECTED_SCHEMA_VERSION);
+    expect(
+      migrated.sqlite.prepare("select name from sqlite_master where type='table' and name='probes'").get(),
+    ).toBeUndefined();
+    const app = appOn(migrated);
+    expect(app.queries.getCurrentView()).toMatchObject({
+      ok: true,
+      value: { season: null, goodLifeConditions: [], intention: null, stages: [] },
+    });
+  });
 });
 
 describe("two connections share one database", () => {
   it("a write on one connection is readable on the other, with state_revision and change log", () => {
     const d = appOn(desktop());
     const m = appOn(mcp());
-    const created = d.commands.createProbe(d.newContext("user-ui", "test"), { title: "shared" });
+    const created = d.commands.createSeason(d.newContext("user-ui", "test"), { focus: "shared" });
     if (!created.ok) throw new Error(created.error.message);
 
-    expect(m.queries.getProbe({ id: created.value.id })).toMatchObject({ ok: true, value: { title: "shared" } });
+    expect(m.queries.getSeason()).toMatchObject({ ok: true, value: { focus: "shared" } });
     expect(m.queries.getStateRevision()).toEqual({ ok: true, value: { stateRevision: 1 } });
 
     const log = mcp().sqlite.prepare("select actor, command_type, entity_id, state_revision from change_log").all();
     expect(log).toEqual([
-      { actor: "user-ui", command_type: "probe.create", entity_id: created.value.id, state_revision: 1 },
+      { actor: "user-ui", command_type: "season.create", entity_id: created.value.id, state_revision: 1 },
     ]);
   });
 
   it("optimistic concurrency: first write wins, stale write gets CONFLICT_RELOAD and overwrites nothing", () => {
     const d = appOn(desktop());
     const m = appOn(mcp());
-    const created = d.commands.createProbe(d.newContext("user-ui", "test"), { title: "v1" });
+    const created = d.commands.createSeason(d.newContext("user-ui", "test"), { focus: "v1" });
     if (!created.ok) throw new Error(created.error.message);
-    const id = created.value.id;
 
     // Both sides read version 1.
-    const seenByDesktop = d.queries.getProbe({ id });
-    const seenByMcp = m.queries.getProbe({ id });
-    if (!seenByDesktop.ok || !seenByMcp.ok) throw new Error("read failed");
+    const seenByDesktop = d.queries.getSeason();
+    const seenByMcp = m.queries.getSeason();
+    if (!seenByDesktop.ok || !seenByMcp.ok || !seenByDesktop.value || !seenByMcp.value) throw new Error("read failed");
 
-    const first = m.commands.renameProbe(m.newContext("mcp-ai", "test"), {
-      id,
+    const first = m.commands.updateSeasonFocus(m.newContext("system", "test"), {
       expectedVersion: seenByMcp.value.version,
-      title: "from MCP",
+      focus: "from MCP",
     });
-    expect(first).toMatchObject({ ok: true, value: { version: 2, title: "from MCP" } });
+    expect(first).toMatchObject({ ok: true, value: { version: 2, focus: "from MCP" } });
 
-    const stale = d.commands.renameProbe(d.newContext("user-ui", "test"), {
-      id,
+    const stale = d.commands.updateSeasonFocus(d.newContext("user-ui", "test"), {
       expectedVersion: seenByDesktop.value.version,
-      title: "stale from UI",
+      focus: "stale from UI",
     });
     expect(stale).toMatchObject({ ok: false, error: { code: "CONFLICT_RELOAD" } });
 
-    expect(d.queries.getProbe({ id })).toMatchObject({ ok: true, value: { title: "from MCP", version: 2 } });
+    expect(d.queries.getSeason()).toMatchObject({ ok: true, value: { focus: "from MCP", version: 2 } });
     expect(d.queries.getStateRevision()).toEqual({ ok: true, value: { stateRevision: 2 } });
   });
 
@@ -146,14 +174,14 @@ describe("two connections share one database", () => {
     const h = desktop();
     const store = createSqliteStore(h, uuidGenerator);
     const app = appOn(h);
-    const created = app.commands.createProbe(app.newContext("system", "test"), { title: "a" });
+    const created = app.commands.createSeason(app.newContext("system", "test"), { focus: "a" });
     if (!created.ok) throw new Error(created.error.message);
     const ctx = app.newContext("system", "test");
     const applied = store.write(ctx, (s) =>
-      s.probes.updateIfVersion({ ...created.value, title: "ghost", version: 5 }, 4),
+      s.season.updateIfVersion({ ...created.value, focus: "ghost", version: 5 }, 4),
     );
     expect(applied).toBe(false);
-    expect(app.queries.getProbe({ id: created.value.id })).toMatchObject({ value: { title: "a", version: 1 } });
+    expect(app.queries.getSeason()).toMatchObject({ value: { focus: "a", version: 1 } });
   });
 
   it("a failing write transaction rolls back entirely (no half state, no revision bump)", () => {
@@ -162,18 +190,18 @@ describe("two connections share one database", () => {
     const app = appOn(h);
     expect(() =>
       store.write(app.newContext("system", "test"), (s) => {
-        s.probes.insert({
+        s.season.insert({
           id: uuidGenerator.next(),
-          title: "half",
+          focus: "half",
           version: 1,
           createdAt: systemClock.now(),
           updatedAt: systemClock.now(),
         });
-        s.recordChange({ commandType: "probe.create", entityType: "probe", entityId: "x", summary: "" });
+        s.recordChange({ commandType: "season.create", entityType: "season", entityId: "x", summary: "" });
         throw new Error("crash mid-command");
       }),
     ).toThrow("crash mid-command");
-    expect(app.queries.listProbes()).toEqual({ ok: true, value: [] });
+    expect(app.queries.getSeason()).toEqual({ ok: true, value: null });
     expect(app.queries.getStateRevision()).toEqual({ ok: true, value: { stateRevision: 0 } });
   });
 
@@ -183,9 +211,9 @@ describe("two connections share one database", () => {
     const app = appOn(h);
     expect(() =>
       store.write(app.newContext("system", "test"), (s) => {
-        s.probes.insert({
+        s.season.insert({
           id: uuidGenerator.next(),
-          title: "forgot recordChange",
+          focus: "forgot recordChange",
           version: 1,
           createdAt: systemClock.now(),
           updatedAt: systemClock.now(),
@@ -193,7 +221,7 @@ describe("two connections share one database", () => {
         // No s.recordChange(...) call here — must not silently commit.
       }),
     ).toThrow(/recordChange/);
-    expect(app.queries.listProbes()).toEqual({ ok: true, value: [] });
+    expect(app.queries.getSeason()).toEqual({ ok: true, value: null });
     expect(app.queries.getStateRevision()).toEqual({ ok: true, value: { stateRevision: 0 } });
   });
 
@@ -201,7 +229,56 @@ describe("two connections share one database", () => {
     const h = desktop();
     const store = createSqliteStore(h, uuidGenerator);
     const app = appOn(h);
-    expect(store.write(app.newContext("system", "test"), (s) => s.probes.list())).toEqual([]);
+    expect(store.write(app.newContext("system", "test"), (s) => s.goodLifeConditions.list())).toEqual([]);
+  });
+
+  it("stress: desktop + MCP hammer one Action — no stale overwrite, no lost update, no SQLITE_BUSY leak", async () => {
+    const WRITES_PER_WRITER = 40;
+    const d = appOn(desktop());
+    const m = appOn(mcp());
+    const ui = d.newContext("user-ui", "test");
+    const intention = d.commands.createIntention(ui, { title: "x", desiredResult: "" });
+    if (!intention.ok) throw new Error(intention.error.message);
+    const stage = d.commands.addStage(ui, { intentionId: intention.value.id, title: "s" });
+    if (!stage.ok) throw new Error(stage.error.message);
+    const action = d.commands.addAction(ui, { stageId: stage.value.id, title: "counter", doneWhen: "" });
+    if (!action.ok) throw new Error(action.error.message);
+    const id = action.value.id;
+
+    const stats = { conflicts: 0, otherErrors: [] as string[], overwrites: [] as string[] };
+    async function writer(app: ReturnType<typeof appOn>, actor: "user-ui" | "system") {
+      for (let done = 0; done < WRITES_PER_WRITER; ) {
+        const seen = app.queries.getCurrentView();
+        if (!seen.ok) throw new Error(seen.error.code);
+        const current = seen.value.stages[0]?.actions[0];
+        if (!current) throw new Error("action missing");
+        // Force interleaving between the two writers: without a yield point here, each async
+        // function's fully-synchronous loop body would run to completion before the other ever
+        // gets a turn, and the race this test exists to exercise would never happen.
+        await new Promise((resolve) => setTimeout(resolve, Math.random() * 3));
+        const r = app.commands.editAction(app.newContext(actor, "test"), {
+          id,
+          expectedVersion: current.version,
+          title: `${actor}-${done}`,
+          doneWhen: "",
+        });
+        if (r.ok && r.value.version !== current.version + 1)
+          stats.overwrites.push(`v${current.version}→v${r.value.version}`);
+        if (r.ok) done++;
+        else if (r.error.code === "CONFLICT_RELOAD") stats.conflicts++;
+        else stats.otherErrors.push(r.error.code);
+      }
+    }
+
+    await Promise.all([writer(d, "user-ui"), writer(m, "system")]);
+
+    const total = 2 * WRITES_PER_WRITER;
+    expect(stats.otherErrors).toEqual([]);
+    expect(stats.overwrites).toEqual([]);
+    expect(stats.conflicts).toBeGreaterThan(0);
+    const finalView = d.queries.getCurrentView();
+    if (!finalView.ok) throw new Error("expected ok");
+    expect(finalView.value.stages[0]?.actions[0]?.version).toBe(1 + total);
   });
 });
 
@@ -210,17 +287,13 @@ describe("per-write schema check (ADR-0003)", () => {
     const h = desktop();
     const store = createSqliteStore(h, uuidGenerator);
     const app = createApplication({ store, clock: systemClock, ids: uuidGenerator });
-    const created = app.commands.createProbe(app.newContext("system", "test"), { title: "x" });
+    const created = app.commands.createSeason(app.newContext("system", "test"), { focus: "x" });
     if (!created.ok) throw new Error(created.error.message);
 
     // Simulate desktop migrating the schema further while this connection is still open.
     h.sqlite.pragma(`user_version = ${EXPECTED_SCHEMA_VERSION + 1}`);
 
-    const result = app.commands.renameProbe(app.newContext("mcp-ai", "test"), {
-      id: created.value.id,
-      expectedVersion: 1,
-      title: "y",
-    });
+    const result = app.commands.updateSeasonFocus(app.newContext("system", "test"), { expectedVersion: 1, focus: "y" });
     expect(result).toMatchObject({ ok: false, error: { code: "SCHEMA_INCOMPATIBLE" } });
   });
 
@@ -231,7 +304,7 @@ describe("per-write schema check (ADR-0003)", () => {
     const second = appOn(mcp()); // a second connection on the same file; MCP's open is convenient here
     first.sqlite.pragma(`user_version = ${EXPECTED_SCHEMA_VERSION + 1}`); // simulate a newer schema landing
 
-    const result = second.commands.createProbe(second.newContext("user-ui", "test"), { title: "x" });
+    const result = second.commands.createSeason(second.newContext("user-ui", "test"), { focus: "x" });
     expect(result).toMatchObject({ ok: false, error: { code: "SCHEMA_INCOMPATIBLE" } });
   });
 });

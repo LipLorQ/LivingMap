@@ -14,5 +14,23 @@ export const MIGRATIONS: ReadonlyArray<{ tag: string; statements: readonly strin
     "statements": [
       "-- Custom SQL migration: the single global revision row (ARCHITECTURE §14).\nINSERT INTO `meta` (`id`, `state_revision`) VALUES (1, 0);"
     ]
+  },
+  {
+    "tag": "0002_drop_probes",
+    "statements": [
+      "DROP TABLE `probes`;"
+    ]
+  },
+  {
+    "tag": "0003_add_intention_domain",
+    "statements": [
+      "CREATE TABLE `actions` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`stage_id` text NOT NULL,\n\t`title` text NOT NULL,\n\t`done_when` text NOT NULL,\n\t`position` integer NOT NULL,\n\t`status` text NOT NULL,\n\t`blocker_reason` text,\n\t`blocked_at` text,\n\t`completed_at` text,\n\t`version` integer NOT NULL,\n\t`created_at` text NOT NULL,\n\t`updated_at` text NOT NULL,\n\tFOREIGN KEY (`stage_id`) REFERENCES `stages`(`id`) ON UPDATE no action ON DELETE cascade\n);",
+      "CREATE INDEX `actions_stage_idx` ON `actions` (`stage_id`);",
+      "CREATE TABLE `good_life_conditions` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`text` text NOT NULL,\n\t`position` integer NOT NULL,\n\t`version` integer NOT NULL,\n\t`created_at` text NOT NULL,\n\t`updated_at` text NOT NULL\n);",
+      "CREATE TABLE `intentions` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`title` text NOT NULL,\n\t`desired_result` text NOT NULL,\n\t`version` integer NOT NULL,\n\t`created_at` text NOT NULL,\n\t`updated_at` text NOT NULL\n);",
+      "CREATE TABLE `season` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`focus` text NOT NULL,\n\t`version` integer NOT NULL,\n\t`created_at` text NOT NULL,\n\t`updated_at` text NOT NULL\n);",
+      "CREATE TABLE `stages` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`intention_id` text NOT NULL,\n\t`title` text NOT NULL,\n\t`position` integer NOT NULL,\n\t`is_current` integer NOT NULL,\n\t`version` integer NOT NULL,\n\t`created_at` text NOT NULL,\n\t`updated_at` text NOT NULL,\n\tFOREIGN KEY (`intention_id`) REFERENCES `intentions`(`id`) ON UPDATE no action ON DELETE cascade\n);",
+      "CREATE INDEX `stages_intention_idx` ON `stages` (`intention_id`);"
+    ]
   }
 ];
