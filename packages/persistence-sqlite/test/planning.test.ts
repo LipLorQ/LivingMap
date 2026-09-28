@@ -289,10 +289,10 @@ describe("route proposal lifecycle (desktop + MCP connections)", () => {
     expect(log.map((l) => l.entity_type)).toEqual(["stage", "stage", "action", "action", "action", "plan", "proposal"]);
     expect(view.recentHistory[0]).toMatchObject({ commandType: "proposal.accept", entityType: "proposal" });
 
-    // Accepting twice is an illegal transition.
+    // Accepting twice (e.g. a double click) is an illegal transition: "already accepted, reload".
     expect(desktop.commands.acceptProposal(ui(), { id: proposal.id })).toMatchObject({
       ok: false,
-      error: { code: "VALIDATION_ERROR" },
+      error: { code: "CONFLICT_RELOAD" },
     });
     expect(desktop.commands.rejectProposal(ui(), { id: proposal.id })).toMatchObject({ ok: false });
   });
@@ -303,7 +303,7 @@ describe("route proposal lifecycle (desktop + MCP connections)", () => {
     const proposal = unwrap(mcp.commands.createRouteProposal(ai(), routeInput(mcp, seed)));
     const before = unwrap(desktop.queries.getCurrentView());
 
-    expect(unwrap(desktop.commands.rejectProposal(ui(), { id: proposal.id }))).toMatchObject({ status: "rejected" });
+    unwrap(desktop.commands.rejectProposal(ui(), { id: proposal.id }));
     const after = unwrap(desktop.queries.getCurrentView());
     expect(after.stages).toEqual(before.stages);
     expect(after.orderedActionPlan).toBeNull();
@@ -436,7 +436,8 @@ describe("SAFE WRITE: reorder_existing_actions", () => {
     unwrap(both.desktop.commands.acceptProposal(both.ui(), { id: proposal.id }));
     const plan = unwrap(both.mcp.queries.getPlanningContext()).orderedActionPlan;
     if (!plan) throw new Error("plan");
-    return { ...both, seed, plan };
+    const rev = () => unwrap(both.mcp.queries.getStateRevision()).stateRevision;
+    return { ...both, seed, plan, rev };
   }
 
   it("is refused before any route was approved — the first order needs the user", () => {
@@ -445,6 +446,7 @@ describe("SAFE WRITE: reorder_existing_actions", () => {
     expect(
       mcp.commands.reorderExistingActions(ai(), {
         intentionId: seed.intention.id,
+        expectedRevision: unwrap(mcp.queries.getStateRevision()).stateRevision,
         expectedPlanVersion: 1,
         orderedActionIds: [seed.open.id],
         rationale: "x",
@@ -453,19 +455,21 @@ describe("SAFE WRITE: reorder_existing_actions", () => {
   });
 
   it("reorders only the plan: same Actions, untouched text/status/blockers, version bump, actor mcp-ai", () => {
-    const { mcp, ai, plan, handle } = withApprovedRoute();
+    const { mcp, ai, plan, handle, rev } = withApprovedRoute();
     const actionsBefore = handle.sqlite.prepare("select * from actions order by id").all();
     const reversed = [...plan.orderedActionIds].reverse();
+    const readAt = rev();
 
     const next = unwrap(
       mcp.commands.reorderExistingActions(ai(), {
         intentionId: plan.intentionId,
+        expectedRevision: readAt,
         expectedPlanVersion: plan.version,
         orderedActionIds: reversed,
         rationale: "Fix friction first",
       }),
     );
-    expect(next).toMatchObject({ version: 2, orderedActionIds: reversed, createdBy: "mcp-ai" });
+    expect(next).toMatchObject({ version: 2, orderedActionIds: reversed, createdBy: "mcp-ai", sourceRevision: readAt });
     expect(handle.sqlite.prepare("select * from actions order by id").all()).toEqual(actionsBefore);
     expect(unwrap(mcp.queries.getPlanningContext()).recentHistory[0]).toMatchObject({
       actor: "mcp-ai",
@@ -478,48 +482,108 @@ describe("SAFE WRITE: reorder_existing_actions", () => {
     ["foreign id", (ids) => [...ids.slice(1), "00000000-0000-4000-8000-00000000ffff"]],
     ["missing action", (ids) => ids.slice(1)],
     ["done action", (ids, seed) => [...ids, seed.done.id]],
+    ["unchanged order and rationale (no-op)", (ids) => ids],
   ])("rejects %s without writing", (_name, mutate) => {
-    const { mcp, ai, plan, seed, handle } = withApprovedRoute();
-    const rev = unwrap(mcp.queries.getStateRevision());
+    const { mcp, ai, plan, seed, handle, rev } = withApprovedRoute();
+    const before = rev();
     expect(
       mcp.commands.reorderExistingActions(ai(), {
         intentionId: plan.intentionId,
+        expectedRevision: before,
         expectedPlanVersion: plan.version,
         orderedActionIds: mutate([...plan.orderedActionIds], seed),
-        rationale: "x",
+        rationale: plan.rationale,
       }),
     ).toMatchObject({ ok: false, error: { code: "VALIDATION_ERROR" } });
-    expect(unwrap(mcp.queries.getStateRevision())).toEqual(rev);
+    expect(rev()).toBe(before);
     expect(count(handle, "ordered_action_plans")).toBe(1);
   });
 
   it("a stale plan version conflicts instead of overwriting", () => {
-    const { mcp, ai, plan } = withApprovedRoute();
+    const { mcp, ai, plan, rev } = withApprovedRoute();
     const input = {
       intentionId: plan.intentionId,
       expectedPlanVersion: plan.version,
       orderedActionIds: [...plan.orderedActionIds],
-      rationale: "first",
     };
-    unwrap(mcp.commands.reorderExistingActions(ai(), input));
-    expect(mcp.commands.reorderExistingActions(ai(), { ...input, rationale: "second" })).toMatchObject({
-      ok: false,
-      error: { code: "CONFLICT_RELOAD" },
-    });
+    unwrap(mcp.commands.reorderExistingActions(ai(), { ...input, expectedRevision: rev(), rationale: "first" }));
+    expect(
+      mcp.commands.reorderExistingActions(ai(), { ...input, expectedRevision: rev(), rationale: "second" }),
+    ).toMatchObject({ ok: false, error: { code: "CONFLICT_RELOAD" } });
+  });
+
+  it("an order reasoned on an outdated world conflicts even if the plan row itself did not change", () => {
+    const { desktop, mcp, ui, ai, plan, rev } = withApprovedRoute();
+    const readAt = rev();
+    const fix = unwrap(desktop.queries.getCurrentView())
+      .stages.flatMap((s) => s.actions)
+      .find((a) => a.title === "Fix top friction");
+    if (!fix) throw new Error("seed");
+    // The user changes reality the AI has not seen; the plan row is untouched.
+    unwrap(desktop.commands.blockAction(ui(), { id: fix.id, expectedVersion: fix.version, reason: "waiting" }));
+    expect(
+      mcp.commands.reorderExistingActions(ai(), {
+        intentionId: plan.intentionId,
+        expectedRevision: readAt,
+        expectedPlanVersion: plan.version,
+        orderedActionIds: [...plan.orderedActionIds].reverse(),
+        rationale: "based on an old reading",
+      }),
+    ).toMatchObject({ ok: false, error: { code: "CONFLICT_RELOAD" } });
   });
 
   it("an Action the user adds after approval shows up as unplanned and can then be ordered safely", () => {
-    const { desktop, mcp, ui, ai, seed, plan } = withApprovedRoute();
+    const { desktop, mcp, ui, ai, seed, plan, rev } = withApprovedRoute();
     const added = unwrap(desktop.commands.addAction(ui(), { stageId: seed.stage.id, title: "New", doneWhen: "" }));
     expect(unwrap(mcp.queries.getPlanningContext()).unplannedActionIds).toEqual([added.id]);
     unwrap(
       mcp.commands.reorderExistingActions(ai(), {
         intentionId: plan.intentionId,
+        expectedRevision: rev(),
         expectedPlanVersion: plan.version,
         orderedActionIds: [added.id, ...plan.orderedActionIds],
         rationale: "Include the user's new action first",
       }),
     );
     expect(unwrap(mcp.queries.getPlanningContext()).unplannedActionIds).toEqual([]);
+  });
+});
+
+describe("pending proposals that can no longer apply", () => {
+  it("dismissing a stale proposal records it as stale, not rejected", () => {
+    const { desktop, mcp, ui, ai } = openBoth();
+    const seed = seedIntention(desktop);
+    const proposal = unwrap(mcp.commands.createRouteProposal(ai(), routeInput(mcp, seed)));
+    unwrap(desktop.commands.addGoodLifeCondition(ui(), { text: "Evenings free" }));
+    unwrap(desktop.commands.rejectProposal(ui(), { id: proposal.id }));
+    expect(unwrap(mcp.queries.getProposal({ id: proposal.id }))).toMatchObject({ status: "stale" });
+    expect(unwrap(mcp.queries.getPlanningContext()).recentHistory[0]).toMatchObject({ commandType: "proposal.stale" });
+  });
+
+  it("an unreadable pending proposal can still be dismissed (no rollback)", () => {
+    const { desktop, mcp, ui, ai, handle } = openBoth();
+    const seed = seedIntention(desktop);
+    const proposal = unwrap(mcp.commands.createRouteProposal(ai(), routeInput(mcp, seed)));
+    handle.sqlite.prepare("update proposals set payload = json(?) where id = ?").run("{}", proposal.id);
+    unwrap(desktop.commands.rejectProposal(ui(), { id: proposal.id }));
+    expect(handle.sqlite.prepare("select status from proposals where id = ?").get(proposal.id)).toEqual({
+      status: "stale",
+    });
+  });
+
+  it("stale ones are swept when the AI proposes again, so they never exhaust the pending limit", () => {
+    const { desktop, mcp, ui, ai, handle } = openBoth();
+    const seed = seedIntention(desktop);
+    for (let i = 0; i < 10; i++) unwrap(mcp.commands.createRouteProposal(ai(), routeInput(mcp, seed)));
+    expect(mcp.commands.createRouteProposal(ai(), routeInput(mcp, seed))).toMatchObject({
+      ok: false,
+      error: { code: "VALIDATION_ERROR" },
+    });
+    // The user changes something: all ten become stale.
+    unwrap(desktop.commands.addGoodLifeCondition(ui(), { text: "Evenings free" }));
+    const fresh = unwrap(mcp.commands.createRouteProposal(ai(), routeInput(mcp, seed)));
+    expect(unwrap(desktop.queries.getCurrentView()).pendingProposals.map((p) => p.id)).toEqual([fresh.id]);
+    const stale = handle.sqlite.prepare("select count(*) n from proposals where status = ?").get("stale");
+    expect(stale).toEqual({ n: 10 });
   });
 });

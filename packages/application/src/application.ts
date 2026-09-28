@@ -188,12 +188,45 @@ export function createApplication(deps: ApplicationDeps) {
       : err("CONFLICT_RELOAD", `Living Map changed (revision ${expected} → ${current}); reread the context and retry`);
   }
 
+  /** Persists a status transition of a pending proposal and logs it (one entry, shared revision). */
+  function resolveAndLog(
+    s: WriteScope,
+    ctx: CommandContext,
+    proposal: Proposal,
+    status: "accepted" | "rejected" | "stale",
+  ): Result<Proposal> {
+    const resolved = resolveProposal(proposal, status, ctx.actor, clock.now());
+    if (!resolved.ok) return err("CONFLICT_RELOAD", `${resolved.reason}; reload`);
+    if (!s.proposals.resolveIfPending(resolved.value)) {
+      return err("CONFLICT_RELOAD", "Proposal changed concurrently; reload and retry");
+    }
+    s.recordChange({
+      commandType: `proposal.${status === "accepted" ? "accept" : status === "rejected" ? "reject" : "stale"}`,
+      entityType: "proposal",
+      entityId: proposal.id,
+      summary: proposal.kind,
+    });
+    return ok(resolved.value);
+  }
+
+  const markStale = (s: WriteScope, ctx: CommandContext, proposal: Proposal) =>
+    resolveAndLog(s, ctx, proposal, "stale");
+
   /** Common checks + persistence for every AI proposal kind. */
   function insertProposal(
     s: WriteScope,
     ctx: CommandContext,
     input: { kind: Proposal["kind"]; intentionId: string; payload: unknown; affected: string[]; rationale: string },
   ): Result<ProposalDto> {
+    // Pending proposals that can no longer apply (stale or unreadable) are persisted as stale first,
+    // so they neither occupy the pending limit nor linger invisibly.
+    const now = clock.now();
+    for (const pending of s.proposals.listPending()) {
+      if (toProposalDto(s, pending, now)?.status !== "pending") {
+        const marked = markStale(s, ctx, pending);
+        if (!marked.ok) return marked;
+      }
+    }
     if (s.proposals.listPending().length >= MAX_PENDING_PROPOSALS) {
       return err("VALIDATION_ERROR", "Too many pending proposals; ask the user to review the existing ones first");
     }
@@ -789,23 +822,14 @@ export function createApplication(deps: ApplicationDeps) {
             });
             if (!dryRun.ok) return err("VALIDATION_ERROR", dryRun.reason);
 
-            const stagesById = new Map(before.stages.map((st) => [st.id, st]));
-            const actionsById = new Map(before.actions.map((a) => [a.id, a]));
             const plan = s.plans.findByIntention(input.intentionId);
             const payload: RoutePayload = {
               intentionId: input.intentionId,
               isFirstRoute: !plan,
               newStages: [...change.value.newStages],
-              stageEdits: change.value.stageEdits.map((e) => ({
-                ...e,
-                previousTitle: stagesById.get(e.id)?.title ?? "",
-              })),
+              stageEdits: [...change.value.stageEdits],
               newActions: [...change.value.newActions],
-              actionEdits: change.value.actionEdits.map((e) => ({
-                ...e,
-                previousTitle: actionsById.get(e.id)?.title ?? "",
-                previousDoneWhen: actionsById.get(e.id)?.doneWhen ?? "",
-              })),
+              actionEdits: [...change.value.actionEdits],
               stageOrder: change.value.stageOrder ? [...change.value.stageOrder] : null,
               orderedActionIds: dryRun.value.orderedActionIds,
             };
@@ -872,23 +896,14 @@ export function createApplication(deps: ApplicationDeps) {
             if (!proposal) return err("NOT_FOUND", "Proposal not found");
             if (proposal.status !== "pending") {
               return err(
-                proposal.status === "stale" ? "STALE_PROPOSAL" : "VALIDATION_ERROR",
+                proposal.status === "stale" ? "STALE_PROPOSAL" : "CONFLICT_RELOAD",
                 `Proposal is already ${proposal.status}`,
               );
             }
             const now = clock.now();
             const finish = (status: "accepted" | "stale"): Result<Outcome> => {
-              const resolved = resolveProposal(proposal, status, ctx.actor, now);
-              if (!resolved.ok) return err("VALIDATION_ERROR", resolved.reason);
-              if (!s.proposals.resolveIfPending(resolved.value)) {
-                return err("CONFLICT_RELOAD", "Proposal changed concurrently; reload and retry");
-              }
-              s.recordChange({
-                commandType: status === "accepted" ? "proposal.accept" : "proposal.stale",
-                entityType: "proposal",
-                entityId: proposal.id,
-                summary: proposal.kind,
-              });
+              const resolved = resolveAndLog(s, ctx, proposal, status);
+              if (!resolved.ok) return resolved;
               return ok({ stale: status === "stale", dto: toProposalDto(s, resolved.value, now) });
             };
 
@@ -928,25 +943,16 @@ export function createApplication(deps: ApplicationDeps) {
           return result.value.dto ? ok(result.value.dto) : err("STORAGE_ERROR", "Proposal could not be read back");
         }),
 
-      rejectProposal: (ctx: CommandContext, input: ResolveProposalInput): Result<ProposalDto> =>
+      /** The user's refusal (user-ui only). Dismissing one that can no longer apply records it as stale. */
+      rejectProposal: (ctx: CommandContext, input: ResolveProposalInput): Result<null> =>
         authorize("proposal.reject", ctx) ??
         guarded("rejectProposal", () =>
-          transact(ctx, (s): Result<ProposalDto> => {
+          transact(ctx, (s): Result<null> => {
             const proposal = s.proposals.findById(input.id);
             if (!proposal) return err("NOT_FOUND", "Proposal not found");
-            const rejected = resolveProposal(proposal, "rejected", ctx.actor, clock.now());
-            if (!rejected.ok) return err("VALIDATION_ERROR", rejected.reason);
-            if (!s.proposals.resolveIfPending(rejected.value)) {
-              return err("CONFLICT_RELOAD", "Proposal changed concurrently; reload and retry");
-            }
-            s.recordChange({
-              commandType: "proposal.reject",
-              entityType: "proposal",
-              entityId: proposal.id,
-              summary: proposal.kind,
-            });
-            const dto = toProposalDto(s, rejected.value, clock.now());
-            return dto ? ok(dto) : err("STORAGE_ERROR", "Proposal could not be read back");
+            const actionable = toProposalDto(s, proposal, clock.now())?.status === "pending";
+            const resolved = resolveAndLog(s, ctx, proposal, actionable ? "rejected" : "stale");
+            return resolved.ok ? ok(null) : resolved;
           }),
         ),
 
@@ -959,6 +965,9 @@ export function createApplication(deps: ApplicationDeps) {
         authorize("plan.reorder", ctx) ??
         guarded("reorderExistingActions", () =>
           transact(ctx, (s): Result<OrderedActionPlanDto> => {
+            // The order must be reasoned against the world the AI actually read (not just the plan row).
+            const conflict = checkRevision(s, input.expectedRevision);
+            if (conflict) return conflict;
             if (!s.intentions.findById(input.intentionId)) return err("NOT_FOUND", "Intention not found");
             const plan = s.plans.findByIntention(input.intentionId);
             if (!plan) {
@@ -972,13 +981,17 @@ export function createApplication(deps: ApplicationDeps) {
             }
             const order = validateActionOrder(input.orderedActionIds, intentionTree(s, input.intentionId).actions);
             if (!order.ok) return err("VALIDATION_ERROR", order.reason);
+            // A no-op would still bump the plan version and stale every pending route proposal.
+            if (order.value.join() === plan.orderedActionIds.join() && input.rationale.trim() === plan.rationale) {
+              return err("VALIDATION_ERROR", "Order and rationale are unchanged; nothing to do");
+            }
             const next = replacePlanOrder(
               plan,
               {
                 orderedActionIds: order.value,
                 rationale: input.rationale,
                 createdBy: ctx.actor,
-                sourceRevision: s.stateRevision(),
+                sourceRevision: input.expectedRevision,
               },
               clock.now(),
             );

@@ -80,17 +80,9 @@ export const RoutePayloadSchema = z.strictObject({
   intentionId: Id,
   isFirstRoute: z.boolean(),
   newStages: z.array(z.strictObject({ id: Id, title: StageTitle })),
-  stageEdits: z.array(z.strictObject({ id: Id, title: StageTitle, previousTitle: z.string() })),
+  stageEdits: z.array(z.strictObject({ id: Id, title: StageTitle })),
   newActions: z.array(z.strictObject({ id: Id, stageId: Id, title: ActionTitle, doneWhen: DoneWhen })),
-  actionEdits: z.array(
-    z.strictObject({
-      id: Id,
-      title: ActionTitle,
-      doneWhen: DoneWhen,
-      previousTitle: z.string(),
-      previousDoneWhen: z.string(),
-    }),
-  ),
+  actionEdits: z.array(z.strictObject({ id: Id, title: ActionTitle, doneWhen: DoneWhen })),
   stageOrder: z.array(Id).nullable(),
   orderedActionIds: z.array(Id).min(1),
 });

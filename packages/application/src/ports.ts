@@ -145,11 +145,13 @@ export interface WriteScope {
   actions: ActionRepository;
   plans: OrderedActionPlanRepository;
   proposals: ProposalRepository;
-  /** The committed revision this transaction started from (before its own bump). */
+  /** The committed revision this transaction started from — still the pre-bump value after recordChange. */
   stateRevision(): number;
   /**
    * Appends to the change log. The first call in a transaction increments `state_revision`;
    * later calls in the same transaction share that revision (one command = one revision bump).
+   * The store's structural guard only detects "rows changed but recordChange never called": writes
+   * made after the first recordChange are not checked, so log each meaningful entity change explicitly.
    */
   recordChange(change: ChangeRecord): number;
 }

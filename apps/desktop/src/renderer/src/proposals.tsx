@@ -5,6 +5,7 @@ import type {
   RoutePreviewDto,
   StageWithActionsDto,
 } from "@living-map/contracts";
+import { useState } from "react";
 
 export const STALE_PROPOSAL_TEXT =
   "Предложение устарело, потому что Живая карта изменилась. Попроси ИИ пересобрать его.";
@@ -101,10 +102,20 @@ function ProposalCard({
   onReject,
 }: {
   proposal: ProposalDto;
-  onAccept: () => void;
-  onReject: () => void;
+  onAccept: () => Promise<unknown>;
+  onReject: () => Promise<unknown>;
 }) {
   const stale = proposal.status === "stale";
+  // One decision at a time: a double click must not fire a second accept/reject.
+  const [busy, setBusy] = useState(false);
+  const decide = (action: () => Promise<unknown>) => async () => {
+    setBusy(true);
+    try {
+      await action();
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <section
       data-testid="proposal"
@@ -151,13 +162,20 @@ function ProposalCard({
           <button
             type="button"
             data-testid="proposal-accept"
-            className="rounded border border-violet-500 bg-violet-600 px-3 py-1 text-white"
-            onClick={onAccept}
+            className="rounded border border-violet-500 bg-violet-600 px-3 py-1 text-white disabled:opacity-50"
+            disabled={busy}
+            onClick={decide(onAccept)}
           >
             Подтвердить
           </button>
         )}
-        <button type="button" data-testid="proposal-reject" className="rounded border px-3 py-1" onClick={onReject}>
+        <button
+          type="button"
+          data-testid="proposal-reject"
+          className="rounded border px-3 py-1 disabled:opacity-50"
+          disabled={busy}
+          onClick={decide(onReject)}
+        >
           Отклонить
         </button>
       </div>
@@ -171,8 +189,8 @@ export function ProposalsSection({
   onReject,
 }: {
   proposals: ProposalDto[];
-  onAccept: (id: string) => void;
-  onReject: (id: string) => void;
+  onAccept: (id: string) => Promise<unknown>;
+  onReject: (id: string) => Promise<unknown>;
 }) {
   if (proposals.length === 0) return null;
   return (

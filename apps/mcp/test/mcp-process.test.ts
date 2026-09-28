@@ -197,6 +197,7 @@ describe("AI brain over stdio: read → propose → user decides in desktop", ()
     expect(
       await call(client, "reorder_existing_actions", {
         intentionId: intention.id,
+        expectedRevision: ctx.stateRevision,
         expectedPlanVersion: 1,
         orderedActionIds: [action.id],
         rationale: "x",

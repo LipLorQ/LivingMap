@@ -247,6 +247,8 @@ describe("applyRouteChange", () => {
     ["order missing an unfinished action", { orderedActionIds: [] }, "at least one"],
     ["order with a done action", { orderedActionIds: ["a1", "a0"] }, "already done"],
     ["empty title", { stageEdits: [{ id: "s1", title: "   " }] }, "empty"],
+    ["no-op stage rename", { stageEdits: [{ id: "s1", title: "stage s1" }] }, "changes nothing"],
+    ["no-op action edit", { actionEdits: [{ id: "a1", title: "action a1", doneWhen: "" }] }, "changes nothing"],
   ])("rejects %s", (_name, patch, reason) => {
     const r = applyRouteChange({
       intentionId: "i1",

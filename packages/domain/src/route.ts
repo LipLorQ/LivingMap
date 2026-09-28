@@ -73,6 +73,7 @@ export function applyRouteChange(input: {
     if (!current) return fail(`Stage ${edit.id} does not belong to this Intention`);
     const edited = editStageTitle(current, edit.title, now);
     if (!edited.ok) return edited;
+    if (edited.value.title === current.title) return fail(`Stage ${edit.id} edit changes nothing`);
     stages.set(edit.id, edited.value);
     updatedStageIds.add(edit.id);
   }
@@ -117,6 +118,9 @@ export function applyRouteChange(input: {
     if (!current) return fail(`Action ${edit.id} does not belong to this Intention`);
     const edited = editAction(current, edit, now);
     if (!edited.ok) return edited;
+    if (edited.value.title === current.title && edited.value.doneWhen === current.doneWhen) {
+      return fail(`Action ${edit.id} edit changes nothing`);
+    }
     actions.set(edit.id, edited.value);
     updatedActionIds.add(edit.id);
   }

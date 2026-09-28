@@ -89,7 +89,7 @@ export type LivingMapApi = {
     reopenAction(input: ReopenActionInput): Promise<Result<ActionDto>>;
     reorderActions(input: ReorderActionsInput): Promise<Result<ActionDto[]>>;
     acceptProposal(input: ResolveProposalInput): Promise<Result<ProposalDto>>;
-    rejectProposal(input: ResolveProposalInput): Promise<Result<ProposalDto>>;
+    rejectProposal(input: ResolveProposalInput): Promise<Result<null>>;
   };
   events: {
     /** Returns an unsubscribe function. */

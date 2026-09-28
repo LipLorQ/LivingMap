@@ -1,4 +1,4 @@
-import type { Application, CommandContext } from "@living-map/application";
+import type { AiSurface } from "@living-map/application";
 import {
   CreateRouteProposalInputSchema,
   err,
@@ -28,7 +28,7 @@ export const MCP_TOOLS = {
 } as const;
 export const MCP_TOOL_NAMES = Object.keys(MCP_TOOLS) as (keyof typeof MCP_TOOLS)[];
 
-export type McpBackend = { status: "ready"; app: Application } | { status: "unavailable"; reason: string };
+export type McpBackend = { status: "ready"; ai: AiSurface } | { status: "unavailable"; reason: string };
 
 const toToolResult = (result: Result<unknown>): CallToolResult => ({
   content: [{ type: "text", text: JSON.stringify(result) }],
@@ -42,14 +42,13 @@ export function createLivingMapMcpServer(
 ): McpServer {
   const server = new McpServer({ name: "living-map", version });
 
-  // Tool handler path: MCP input → Zod (SDK, contract schema) → application (capability policy →
-  // domain → repository transaction) → typed result. Every write runs as actor `mcp-ai` with a
-  // fresh correlationId.
-  const run = (use: (app: Application, ai: () => CommandContext) => Result<unknown>): CallToolResult => {
+  // Tool handler path: MCP input → Zod (SDK, contract schema) → AI surface (actor fixed to `mcp-ai`,
+  // fresh correlationId per write) → application (capability policy → domain → repository
+  // transaction) → typed result.
+  const run = (use: (ai: AiSurface) => Result<unknown>): CallToolResult => {
     const backend = resolveBackend();
     if (backend.status !== "ready") return toToolResult(err("SCHEMA_INCOMPATIBLE", backend.reason));
-    const { app } = backend;
-    const result = use(app, () => app.newContext("mcp-ai", "mcp"));
+    const result = use(backend.ai);
     // A per-write schema check (ADR-0003) just failed on a connection we thought was ready —
     // drop it instead of repeating the same stale error on every subsequent call.
     if (!result.ok && result.error.code === "SCHEMA_INCOMPATIBLE") invalidateBackend();
@@ -62,7 +61,7 @@ export function createLivingMapMcpServer(
   server.registerTool(
     "get_state_revision",
     { description: "Global monotonically increasing revision of the Living Map state.", annotations: read },
-    () => run((app) => app.queries.getStateRevision()),
+    () => run((ai) => ai.getStateRevision()),
   );
 
   server.registerTool(
@@ -72,7 +71,7 @@ export function createLivingMapMcpServer(
         "Read the user's whole current planning reality in one call: stateRevision, Season focus, «Чем ты не хочешь жертвовать ради целей?» (hard constraints), the active Intention with its desired result, Stages, Actions (status, doneWhen, blockers), the approved OrderedActionPlan, unplanned actions, pending proposals and recent history. `meanings` explains what every concept means to the user and what you may and may not change — read it first.",
       annotations: read,
     },
-    () => run((app) => app.queries.getPlanningContext()),
+    () => run((ai) => ai.getPlanningContext()),
   );
 
   server.registerTool(
@@ -82,7 +81,7 @@ export function createLivingMapMcpServer(
       inputSchema: ListChangeHistoryInputSchema,
       annotations: read,
     },
-    (input) => run((app) => app.queries.listChangeHistory(input)),
+    (input) => run((ai) => ai.listChangeHistory(input)),
   );
 
   server.registerTool(
@@ -93,7 +92,7 @@ export function createLivingMapMcpServer(
       inputSchema: GetProposalInputSchema,
       annotations: read,
     },
-    (input) => run((app) => app.queries.getProposal(input)),
+    (input) => run((ai) => ai.getProposal(input)),
   );
 
   server.registerTool(
@@ -104,7 +103,7 @@ export function createLivingMapMcpServer(
       inputSchema: CreateRouteProposalInputSchema,
       annotations: write,
     },
-    (input) => run((app, ai) => app.commands.createRouteProposal(ai(), input)),
+    (input) => run((ai) => ai.createRouteProposal(input)),
   );
 
   server.registerTool(
@@ -115,7 +114,7 @@ export function createLivingMapMcpServer(
       inputSchema: ProposeDesiredResultChangeInputSchema,
       annotations: write,
     },
-    (input) => run((app, ai) => app.commands.proposeDesiredResultChange(ai(), input)),
+    (input) => run((ai) => ai.proposeDesiredResultChange(input)),
   );
 
   server.registerTool(
@@ -126,7 +125,7 @@ export function createLivingMapMcpServer(
       inputSchema: ReorderExistingActionsInputSchema,
       annotations: write,
     },
-    (input) => run((app, ai) => app.commands.reorderExistingActions(ai(), input)),
+    (input) => run((ai) => ai.reorderExistingActions(input)),
   );
 
   return server;

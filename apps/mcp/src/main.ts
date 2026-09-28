@@ -1,7 +1,7 @@
 // MCP composition root (ARCHITECTURE §9): config/path → SQLite connection → repositories
 // → application services → MCP tools. Launched by an MCP host over stdio; never listens on a port.
 // stdout belongs to the MCP protocol — diagnostics go to stderr only.
-import { createApplication } from "@living-map/application";
+import { createAiSurface, createApplication } from "@living-map/application";
 import {
   createSqliteStore,
   databaseFile,
@@ -42,7 +42,7 @@ function resolveBackend(): McpBackend {
       reportError: (operation, error) =>
         console.error(`[living-map-mcp] ${operation} failed: ${error instanceof Error ? error.name : "unknown"}`),
     });
-    ready = { backend: { status: "ready", app }, handle: opened.handle };
+    ready = { backend: { status: "ready", ai: createAiSurface(app) }, handle: opened.handle };
     return ready.backend;
   }
   if (opened.status === "incompatible") opened.handle.close();

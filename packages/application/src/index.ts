@@ -1,3 +1,5 @@
+export type { AiSurface } from "./ai-surface";
+export { createAiSurface } from "./ai-surface";
 export type { Application } from "./application";
 export { createApplication } from "./application";
 export type { Actor, CommandContext, CommandSource } from "./context";

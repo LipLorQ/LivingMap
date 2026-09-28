@@ -20,6 +20,10 @@ export type OrderedActionPlanDto = z.infer<typeof OrderedActionPlanDtoSchema>;
 /** SAFE WRITE (mcp-ai): reorder already-approved Actions of an already-approved route. */
 export const ReorderExistingActionsInputSchema = z.strictObject({
   intentionId: Id,
+  expectedRevision: z
+    .int()
+    .nonnegative()
+    .describe("stateRevision from get_living_map_context; a mismatch returns CONFLICT_RELOAD"),
   expectedPlanVersion: Version.describe("orderedActionPlan.version you read; a mismatch returns CONFLICT_RELOAD"),
   orderedActionIds: z
     .array(Id)
