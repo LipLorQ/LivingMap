@@ -5,9 +5,10 @@ import type { Actor } from "./context";
  * Absence of a rule is NOT permission: unknown command or actor → denied.
  * Reads (queries) are open to every actor in the spike.
  *
- * `mcp-ai` is deliberately absent from every command below: this stage does not expose the real
- * product domain to MCP (this stage's prompt §2/§19 — that is Stage 3's job). Only `user-ui` and
- * `system` (tests, fixtures) may write.
+ * `mcp-ai` may only (a) create proposals and (b) run the one SAFE WRITE: reordering the already
+ * approved Actions of an already approved route. Every direct domain write — and accepting or
+ * rejecting a proposal — is `user-ui`/`system` only, so a strategic change can reach the domain
+ * solely through `proposal.accept` performed by the user (ARCHITECTURE §22–24).
  */
 export const COMMAND_POLICY = {
   "season.create": ["user-ui", "system"],
@@ -29,6 +30,10 @@ export const COMMAND_POLICY = {
   "action.unblock": ["user-ui", "system"],
   "action.reopen": ["user-ui", "system"],
   "action.reorder": ["user-ui", "system"],
+  "proposal.create": ["mcp-ai", "system"],
+  "proposal.accept": ["user-ui", "system"],
+  "proposal.reject": ["user-ui", "system"],
+  "plan.reorder": ["mcp-ai", "system"],
 } as const satisfies Record<string, readonly Actor[]>;
 
 export type CommandName = keyof typeof COMMAND_POLICY;

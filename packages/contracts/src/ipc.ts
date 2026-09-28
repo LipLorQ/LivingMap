@@ -16,11 +16,13 @@ import type {
   GoodLifeConditionDto,
   IntentionDto,
   ListChangeHistoryInput,
+  ProposalDto,
   RemoveGoodLifeConditionInput,
   ReopenActionInput,
   ReorderActionsInput,
   ReorderGoodLifeConditionsInput,
   ReorderStagesInput,
+  ResolveProposalInput,
   Result,
   SeasonDto,
   SetCurrentStageInput,
@@ -55,6 +57,8 @@ export const IPC_CHANNELS = {
   unblockAction: "lm:command:unblockAction",
   reopenAction: "lm:command:reopenAction",
   reorderActions: "lm:command:reorderActions",
+  acceptProposal: "lm:command:acceptProposal",
+  rejectProposal: "lm:command:rejectProposal",
   stateChanged: "lm:event:stateChanged",
 } as const;
 
@@ -84,6 +88,8 @@ export type LivingMapApi = {
     unblockAction(input: UnblockActionInput): Promise<Result<ActionDto>>;
     reopenAction(input: ReopenActionInput): Promise<Result<ActionDto>>;
     reorderActions(input: ReorderActionsInput): Promise<Result<ActionDto[]>>;
+    acceptProposal(input: ResolveProposalInput): Promise<Result<ProposalDto>>;
+    rejectProposal(input: ResolveProposalInput): Promise<Result<ProposalDto>>;
   };
   events: {
     /** Returns an unsubscribe function. */

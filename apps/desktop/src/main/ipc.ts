@@ -17,6 +17,7 @@ import {
   ReorderActionsInputSchema,
   ReorderGoodLifeConditionsInputSchema,
   ReorderStagesInputSchema,
+  ResolveProposalInputSchema,
   type Result,
   SetCurrentStageInputSchema,
   UnblockActionInputSchema,
@@ -94,4 +95,8 @@ export function registerIpcHandlers(app: Application, isTrusted: TrustCheck): vo
   handle(IPC_CHANNELS.unblockAction, UnblockActionInputSchema, (input) => app.commands.unblockAction(ui(), input));
   handle(IPC_CHANNELS.reopenAction, ReopenActionInputSchema, (input) => app.commands.reopenAction(ui(), input));
   handle(IPC_CHANNELS.reorderActions, ReorderActionsInputSchema, (input) => app.commands.reorderActions(ui(), input));
+
+  // The user's decision on an AI proposal. Only reachable from the desktop (never from MCP).
+  handle(IPC_CHANNELS.acceptProposal, ResolveProposalInputSchema, (input) => app.commands.acceptProposal(ui(), input));
+  handle(IPC_CHANNELS.rejectProposal, ResolveProposalInputSchema, (input) => app.commands.rejectProposal(ui(), input));
 }

@@ -32,5 +32,14 @@ export const MIGRATIONS: ReadonlyArray<{ tag: string; statements: readonly strin
       "CREATE TABLE `stages` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`intention_id` text NOT NULL,\n\t`title` text NOT NULL,\n\t`position` integer NOT NULL,\n\t`is_current` integer NOT NULL,\n\t`version` integer NOT NULL,\n\t`created_at` text NOT NULL,\n\t`updated_at` text NOT NULL,\n\tFOREIGN KEY (`intention_id`) REFERENCES `intentions`(`id`) ON UPDATE no action ON DELETE cascade\n);",
       "CREATE INDEX `stages_intention_idx` ON `stages` (`intention_id`);"
     ]
+  },
+  {
+    "tag": "0004_add_plans_and_proposals",
+    "statements": [
+      "CREATE TABLE `ordered_action_plans` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`intention_id` text NOT NULL,\n\t`ordered_action_ids` text NOT NULL,\n\t`rationale` text NOT NULL,\n\t`created_by` text NOT NULL,\n\t`created_at` text NOT NULL,\n\t`updated_at` text NOT NULL,\n\t`version` integer NOT NULL,\n\t`source_revision` integer NOT NULL,\n\tFOREIGN KEY (`intention_id`) REFERENCES `intentions`(`id`) ON UPDATE no action ON DELETE cascade\n);",
+      "CREATE UNIQUE INDEX `ordered_action_plans_intention_idx` ON `ordered_action_plans` (`intention_id`);",
+      "CREATE TABLE `proposals` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`kind` text NOT NULL,\n\t`status` text NOT NULL,\n\t`created_by` text NOT NULL,\n\t`created_at` text NOT NULL,\n\t`base_revision` integer NOT NULL,\n\t`base_fingerprint` text NOT NULL,\n\t`affected_entity_ids` text NOT NULL,\n\t`payload` text NOT NULL,\n\t`rationale` text NOT NULL,\n\t`resolved_at` text,\n\t`resolved_by` text\n);",
+      "CREATE INDEX `proposals_status_idx` ON `proposals` (`status`);"
+    ]
   }
 ];

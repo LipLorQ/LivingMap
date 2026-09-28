@@ -7,6 +7,10 @@ import type {
   IdGenerator,
   IntentionReader,
   IntentionRepository,
+  OrderedActionPlanReader,
+  OrderedActionPlanRepository,
+  ProposalReader,
+  ProposalRepository,
   SeasonReader,
   SeasonRepository,
   StageReader,
@@ -14,11 +18,32 @@ import type {
   Store,
 } from "@living-map/application";
 import { SchemaConflictError } from "@living-map/application";
-import type { Action, ActionStatus, GoodLifeCondition, Instant, Intention, Season, Stage } from "@living-map/domain";
+import type {
+  Action,
+  ActionStatus,
+  GoodLifeCondition,
+  Instant,
+  Intention,
+  Proposal,
+  ProposalKind,
+  ProposalStatus,
+  Season,
+  Stage,
+} from "@living-map/domain";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import type { Db, SqliteHandle } from "./connection";
 import { EXPECTED_SCHEMA_VERSION } from "./migrate";
-import { actions, changeLog, goodLifeConditions, intentions, meta, season, stages } from "./schema";
+import {
+  actions,
+  changeLog,
+  goodLifeConditions,
+  intentions,
+  meta,
+  orderedActionPlans,
+  proposals,
+  season,
+  stages,
+} from "./schema";
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 type ActionRow = typeof actions.$inferSelect;
@@ -145,7 +170,7 @@ function stageRepository(q: Tx): StageRepository {
     updateIfVersion: (stage, expectedVersion) =>
       q
         .update(stages)
-        .set({ title: stage.title, version: stage.version, updatedAt: stage.updatedAt })
+        .set({ title: stage.title, position: stage.position, version: stage.version, updatedAt: stage.updatedAt })
         .where(and(eq(stages.id, stage.id), eq(stages.version, expectedVersion)))
         .run().changes === 1,
     reorder: (positions, now) => {
@@ -232,9 +257,83 @@ function actionRepository(q: Tx): ActionRepository {
   };
 }
 
+function planReader(q: Tx): OrderedActionPlanReader {
+  return {
+    findByIntention: (intentionId) =>
+      q.select().from(orderedActionPlans).where(eq(orderedActionPlans.intentionId, intentionId)).get(),
+  };
+}
+
+function planRepository(q: Tx): OrderedActionPlanRepository {
+  return {
+    ...planReader(q),
+    insert: (plan) =>
+      void q
+        .insert(orderedActionPlans)
+        .values({ ...plan, orderedActionIds: [...plan.orderedActionIds] })
+        .run(),
+    updateIfVersion: (plan, expectedVersion) =>
+      q
+        .update(orderedActionPlans)
+        .set({
+          orderedActionIds: [...plan.orderedActionIds],
+          rationale: plan.rationale,
+          createdBy: plan.createdBy,
+          updatedAt: plan.updatedAt,
+          version: plan.version,
+          sourceRevision: plan.sourceRevision,
+        })
+        .where(and(eq(orderedActionPlans.id, plan.id), eq(orderedActionPlans.version, expectedVersion)))
+        .run().changes === 1,
+  };
+}
+
+type ProposalRow = typeof proposals.$inferSelect;
+const rowToProposal = (row: ProposalRow): Proposal => ({
+  ...row,
+  kind: row.kind as ProposalKind,
+  status: row.status as ProposalStatus,
+});
+
+function proposalReader(q: Tx): ProposalReader {
+  return {
+    findById: (id) => {
+      const row = q.select().from(proposals).where(eq(proposals.id, id)).get();
+      return row ? rowToProposal(row) : undefined;
+    },
+    listPending: () =>
+      q
+        .select()
+        .from(proposals)
+        .where(eq(proposals.status, "pending"))
+        .orderBy(asc(proposals.createdAt))
+        .all()
+        .map(rowToProposal),
+  };
+}
+
+function proposalRepository(q: Tx): ProposalRepository {
+  return {
+    ...proposalReader(q),
+    insert: (p) =>
+      void q
+        .insert(proposals)
+        .values({ ...p, affectedEntityIds: [...p.affectedEntityIds] })
+        .run(),
+    resolveIfPending: (p) =>
+      q
+        .update(proposals)
+        .set({ status: p.status, resolvedAt: p.resolvedAt, resolvedBy: p.resolvedBy })
+        .where(and(eq(proposals.id, p.id), eq(proposals.status, "pending")))
+        .run().changes === 1,
+  };
+}
+
 function changeLogReader(q: Tx): ChangeLogReader {
   return {
-    listRecent: (limit) => q.select().from(changeLog).orderBy(desc(changeLog.stateRevision)).limit(limit).all(),
+    // One command may log several entries under one revision; rowid keeps their insertion order.
+    listRecent: (limit) =>
+      q.select().from(changeLog).orderBy(desc(changeLog.stateRevision), desc(sql`rowid`)).limit(limit).all(),
   };
 }
 
@@ -262,6 +361,8 @@ export function createSqliteStore(handle: SqliteHandle, ids: IdGenerator): Store
             intentions: intentionReader(tx),
             stages: stageReader(tx),
             actions: actionReader(tx),
+            plans: planReader(tx),
+            proposals: proposalReader(tx),
             changeLog: changeLogReader(tx),
             stateRevision: () => readRevision(tx),
           }),
@@ -280,33 +381,40 @@ export function createSqliteStore(handle: SqliteHandle, ids: IdGenerator): Store
           if (current !== EXPECTED_SCHEMA_VERSION) throw new SchemaConflictError();
 
           const changesBefore = totalChanges();
-          let recorded = false;
+          const startRevision = readRevision(tx);
+          // One command = one revision bump (ARCHITECTURE §14/§44), however many entries it logs.
+          let revision: number | undefined;
           const result = work({
             season: seasonRepository(tx),
             goodLifeConditions: goodLifeConditionRepository(tx),
             intentions: intentionRepository(tx),
             stages: stageRepository(tx),
             actions: actionRepository(tx),
+            plans: planRepository(tx),
+            proposals: proposalRepository(tx),
+            stateRevision: () => startRevision,
             recordChange: (change) => {
-              recorded = true;
-              const row = tx
-                .update(meta)
-                .set({ stateRevision: sql`${meta.stateRevision} + 1` })
-                .where(eq(meta.id, 1))
-                .returning({ stateRevision: meta.stateRevision })
-                .get();
-              if (!row) throw new Error("meta row missing");
+              if (revision === undefined) {
+                const row = tx
+                  .update(meta)
+                  .set({ stateRevision: sql`${meta.stateRevision} + 1` })
+                  .where(eq(meta.id, 1))
+                  .returning({ stateRevision: meta.stateRevision })
+                  .get();
+                if (!row) throw new Error("meta row missing");
+                revision = row.stateRevision;
+              }
               tx.insert(changeLog)
                 .values({
                   id: ids.next(),
                   timestamp: ctx.timestamp,
                   actor: ctx.actor,
                   correlationId: ctx.correlationId,
-                  stateRevision: row.stateRevision,
+                  stateRevision: revision,
                   ...change,
                 })
                 .run();
-              return row.stateRevision;
+              return revision;
             },
           });
           // Structural guarantee (ARCHITECTURE §44): a command must not depend on remembering to
@@ -314,7 +422,7 @@ export function createSqliteStore(handle: SqliteHandle, ids: IdGenerator): Store
           // of silently breaking the change log / MCP→UI revision watch. Note: SQLite's
           // total_changes() counts a same-value UPDATE (`SET x = x`) as a change too, so a future
           // idempotent no-op command would also need to call recordChange — no command does today.
-          if (!recorded && totalChanges() !== changesBefore) {
+          if (revision === undefined && totalChanges() !== changesBefore) {
             throw new Error("Write transaction changed rows without calling recordChange()");
           }
           return result;

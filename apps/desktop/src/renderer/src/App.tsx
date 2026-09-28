@@ -5,14 +5,16 @@ import type {
   CurrentViewDto,
   GoodLifeConditionDto,
   IntentionDto,
+  OrderedActionPlanDto,
   Result,
   SeasonDto,
   StageWithActionsDto,
 } from "@living-map/contracts";
 import { useCallback, useEffect, useState } from "react";
+import { PlanSection, ProposalsSection, STALE_PROPOSAL_TEXT } from "./proposals";
 
-// Utilitarian product screen (this stage's prompt §20): clarity, correct behavior, quick editing,
-// persistence — deliberately not visually polished. No AI ordering, no Now, no timer.
+// Utilitarian product screen: clarity, correct behavior, quick editing, persistence — deliberately
+// not visually polished. AI proposals are reviewed here; no Now, no timer, no calendar.
 export function App() {
   const [view, setView] = useState<CurrentViewDto | null>(null);
   const [history, setHistory] = useState<ChangeLogEntryDto[]>([]);
@@ -56,6 +58,12 @@ export function App() {
         </p>
       )}
 
+      <ProposalsSection
+        proposals={view.pendingProposals}
+        onAccept={(id) => run(window.livingMap.commands.acceptProposal({ id }))}
+        onReject={(id) => run(window.livingMap.commands.rejectProposal({ id }))}
+      />
+
       <SeasonSection
         season={view.season}
         onCreate={(focus) => run(window.livingMap.commands.createSeason({ focus }))}
@@ -79,6 +87,8 @@ export function App() {
       <IntentionSection
         intention={view.intention}
         stages={view.stages}
+        plan={view.orderedActionPlan}
+        unplannedActionIds={view.unplannedActionIds}
         onCreateIntention={(title, desiredResult) =>
           run(window.livingMap.commands.createIntention({ title, desiredResult }))
         }
@@ -125,7 +135,7 @@ const ERROR_MESSAGES: Record<AppError["code"], string> = {
   CONFLICT_RELOAD: "Данные изменились в другом месте — обновите и попробуйте снова.",
   PERMISSION_DENIED: "Действие не разрешено.",
   REQUIRES_CONFIRMATION: "Требуется подтверждение.",
-  STALE_PROPOSAL: "Предложение устарело.",
+  STALE_PROPOSAL: STALE_PROPOSAL_TEXT,
   NEEDS_AI_REPLAN: "Нужно перепланирование ИИ.",
   INTEGRATION_UNAVAILABLE: "Внешний сервис недоступен.",
   STORAGE_ERROR: "Не удалось сохранить данные.",
@@ -155,11 +165,35 @@ const HISTORY_LABELS: Record<string, string> = {
   "action.block": "Действие заблокировано",
   "action.unblock": "Действие снова доступно",
   "action.reopen": "Действие возвращено в работу",
-  "action.reorder": "Изменён порядок действий",
+  "action.reorder": "Изменён порядок показа действий в этапе",
+  "proposal.reject": "Отклонено предложение ИИ",
+  "proposal.stale": "Предложение ИИ устарело",
+  "plan.reorder": "ИИ изменил порядок действий",
 };
 
-function translateHistoryEntry(commandType: string): string {
-  return HISTORY_LABELS[commandType] ?? "Изменение";
+const PROPOSAL_KIND_LABELS: Record<string, string> = {
+  route: "ИИ предложил маршрут",
+  desired_result: "ИИ предложил новый желаемый результат",
+};
+
+const ACCEPTED_LABELS: Record<string, string> = {
+  "proposal:route": "Принято предложение ИИ: маршрут",
+  "proposal:desired_result": "Принято предложение ИИ: желаемый результат",
+  "stage:added": "Из предложения ИИ: добавлен этап",
+  "stage:edited": "Из предложения ИИ: изменён этап",
+  "action:added": "Из предложения ИИ: добавлено действие",
+  "action:edited": "Из предложения ИИ: изменено действие",
+  "intention:desired result changed": "Из предложения ИИ: изменён желаемый результат",
+};
+
+/** Distinguishes the user's own changes, AI proposals, AI safe reorders and accepted AI changes. */
+function translateHistoryEntry(entry: ChangeLogEntryDto): string {
+  if (entry.commandType === "proposal.create") return PROPOSAL_KIND_LABELS[entry.summary] ?? "ИИ сделал предложение";
+  if (entry.commandType === "proposal.accept") {
+    if (entry.entityType === "plan") return "Из предложения ИИ: установлен порядок действий";
+    return ACCEPTED_LABELS[`${entry.entityType}:${entry.summary}`] ?? "Принято предложение ИИ";
+  }
+  return HISTORY_LABELS[entry.commandType] ?? "Изменение";
 }
 
 const ACTION_STATUS_LABELS: Record<ActionDto["status"], string> = {
@@ -364,6 +398,8 @@ function CreateIntentionForm({ onCreate }: { onCreate: (title: string, desiredRe
 type IntentionSectionProps = {
   intention: IntentionDto | null;
   stages: StageWithActionsDto[];
+  plan: OrderedActionPlanDto | null;
+  unplannedActionIds: string[];
   onCreateIntention: (title: string, desiredResult: string) => void;
   onUpdateIntention: (id: string, expectedVersion: number, title: string, desiredResult: string) => void;
   onAddStage: (intentionId: string, title: string) => void;
@@ -421,6 +457,7 @@ function IntentionEditor(props: IntentionSectionProps & { intention: IntentionDt
       )}
 
       <StagesSection {...props} />
+      <PlanSection plan={props.plan} stages={props.stages} unplannedActionIds={props.unplannedActionIds} />
     </section>
   );
 }
@@ -666,7 +703,7 @@ function ChangeHistorySection({ entries }: { entries: ChangeLogEntryDto[] }) {
       <ul className="space-y-0.5 text-neutral-600">
         {entries.map((entry) => (
           <li key={entry.id} data-testid="history-entry">
-            {translateHistoryEntry(entry.commandType)}
+            {translateHistoryEntry(entry)}
           </li>
         ))}
       </ul>

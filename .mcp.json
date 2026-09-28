@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "living-map": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["--import", "tsx", "apps/mcp/src/main.ts"]
+    }
+  }
+}

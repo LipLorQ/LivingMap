@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { check, foreignKey, index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { check, foreignKey, index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 /** Single-row technical metadata. `state_revision` is the global revision (ARCHITECTURE §14). */
 export const meta = sqliteTable(
@@ -96,4 +96,51 @@ export const actions = sqliteTable(
     index("actions_stage_idx").on(t.stageId),
     foreignKey({ columns: [t.stageId], foreignColumns: [stages.id] }).onDelete("cascade"),
   ],
+);
+
+/**
+ * The canonical AI-maintained execution order (ARCHITECTURE §25), one per Intention.
+ * `ordered_action_ids` is a JSON array of Action UUIDs; its invariants live in the domain.
+ */
+export const orderedActionPlans = sqliteTable(
+  "ordered_action_plans",
+  {
+    id: text("id").primaryKey(),
+    intentionId: text("intention_id").notNull(),
+    orderedActionIds: text("ordered_action_ids", { mode: "json" }).$type<string[]>().notNull(),
+    rationale: text("rationale").notNull(),
+    createdBy: text("created_by").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    version: integer("version").notNull(),
+    sourceRevision: integer("source_revision").notNull(),
+  },
+  (t) => [
+    uniqueIndex("ordered_action_plans_intention_idx").on(t.intentionId),
+    foreignKey({ columns: [t.intentionId], foreignColumns: [intentions.id] }).onDelete("cascade"),
+  ],
+);
+
+/**
+ * AI proposals (ARCHITECTURE §23). `payload` is JSON validated against the typed contract schema
+ * for `kind` by the application on creation and again before being applied — never trusted as is.
+ */
+export const proposals = sqliteTable(
+  "proposals",
+  {
+    id: text("id").primaryKey(),
+    kind: text("kind").notNull(),
+    /** 'pending' | 'accepted' | 'rejected' | 'stale' (ProposalStatus). */
+    status: text("status").notNull(),
+    createdBy: text("created_by").notNull(),
+    createdAt: text("created_at").notNull(),
+    baseRevision: integer("base_revision").notNull(),
+    baseFingerprint: text("base_fingerprint").notNull(),
+    affectedEntityIds: text("affected_entity_ids", { mode: "json" }).$type<string[]>().notNull(),
+    payload: text("payload", { mode: "json" }).$type<unknown>().notNull(),
+    rationale: text("rationale").notNull(),
+    resolvedAt: text("resolved_at"),
+    resolvedBy: text("resolved_by"),
+  },
+  (t) => [index("proposals_status_idx").on(t.status)],
 );

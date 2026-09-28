@@ -18,6 +18,7 @@ import {
   systemClock,
   uuidGenerator,
 } from "../src";
+import { MIGRATIONS } from "../src/migrations.generated";
 
 let home: string;
 let file: string;
@@ -97,21 +98,10 @@ describe("migrations ownership (ARCHITECTURE §16)", () => {
   });
 
   it("migrates cleanly from the previous real (Stage 1 / probes) schema, dropping probes and adding the domain tables", () => {
-    // Reproduce a Stage-1 database: apply only the first two migrations (schema v2, with `probes`).
-    const h = desktop();
-    h.close();
-    opened.pop();
+    // Reproduce a Stage-1 database: apply only the first two real migrations (schema v2, with `probes`).
     const reset = new Database(file);
-    reset.pragma("foreign_keys = OFF");
-    reset.exec(
-      "DROP TABLE actions; DROP TABLE stages; DROP TABLE intentions; DROP TABLE good_life_conditions; DROP TABLE season;",
-    );
-    reset.exec(
-      "CREATE TABLE probes (id text PRIMARY KEY NOT NULL, title text NOT NULL, version integer NOT NULL, created_at text NOT NULL, updated_at text NOT NULL);",
-    );
+    applyMigrations(reset, MIGRATIONS.slice(0, 2));
     reset.exec("INSERT INTO probes (id, title, version, created_at, updated_at) VALUES ('p1', 'legacy', 1, 'T', 'T');");
-    reset.pragma("user_version = 2");
-    reset.pragma("foreign_keys = ON");
     reset.close();
 
     const migrated = desktop();

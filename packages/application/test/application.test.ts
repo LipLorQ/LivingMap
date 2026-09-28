@@ -1,4 +1,13 @@
-import type { Action, GoodLifeCondition, Instant, Intention, Season, Stage } from "@living-map/domain";
+import type {
+  Action,
+  GoodLifeCondition,
+  Instant,
+  Intention,
+  OrderedActionPlan,
+  Proposal,
+  Season,
+  Stage,
+} from "@living-map/domain";
 import { describe, expect, it } from "vitest";
 import { type Clock, createApplication, type IdGenerator, isAllowed, type Store } from "../src";
 
@@ -9,6 +18,15 @@ function memoryStore(): Store & { revision: number; changes: string[]; rollbacks
   const intentionRows = new Map<string, Intention>();
   const stageRows = new Map<string, Stage>();
   const actionRows = new Map<string, Action>();
+  // Stage 3 aggregates are exercised against real SQLite (persistence-sqlite/test/planning.test.ts);
+  // here they only need to exist so the fake satisfies the scope ports.
+  const planRows = new Map<string, OrderedActionPlan>();
+  const proposalRows = new Map<string, Proposal>();
+  const plansReader = { findByIntention: (iid: string) => [...planRows.values()].find((p) => p.intentionId === iid) };
+  const proposalsReader = {
+    findById: (id: string) => proposalRows.get(id),
+    listPending: () => [...proposalRows.values()].filter((p) => p.status === "pending"),
+  };
   const changeLogRows: Array<{
     id: string;
     timestamp: Instant;
@@ -44,6 +62,8 @@ function memoryStore(): Store & { revision: number; changes: string[]; rollbacks
           listByStage: (sid) => byPosition([...actionRows.values()].filter((a) => a.stageId === sid)),
           listByStages: (sids) => byPosition([...actionRows.values()].filter((a) => sids.includes(a.stageId))),
         },
+        plans: plansReader,
+        proposals: proposalsReader,
         changeLog: { listRecent: (limit) => changeLogRows.slice().reverse().slice(0, limit) },
         stateRevision: () => state.revision,
       }) as T,
@@ -54,6 +74,8 @@ function memoryStore(): Store & { revision: number; changes: string[]; rollbacks
         intentionRows: new Map(intentionRows),
         stageRows: new Map(stageRows),
         actionRows: new Map(actionRows),
+        planRows: new Map(planRows),
+        proposalRows: new Map(proposalRows),
         revision: state.revision,
         changes: [...state.changes],
         changeLogRows: [...changeLogRows],
@@ -70,6 +92,10 @@ function memoryStore(): Store & { revision: number; changes: string[]; rollbacks
         for (const [k, v] of snapshot.stageRows) stageRows.set(k, v);
         actionRows.clear();
         for (const [k, v] of snapshot.actionRows) actionRows.set(k, v);
+        planRows.clear();
+        for (const [k, v] of snapshot.planRows) planRows.set(k, v);
+        proposalRows.clear();
+        for (const [k, v] of snapshot.proposalRows) proposalRows.set(k, v);
         state.revision = snapshot.revision;
         state.changes = snapshot.changes;
         changeLogRows.length = 0;
@@ -78,6 +104,7 @@ function memoryStore(): Store & { revision: number; changes: string[]; rollbacks
         throw error;
       }
       function runWork(w: Parameters<Store["write"]>[1]): T {
+        const startRevision = state.revision;
         return w({
           season: {
             get: () => seasonRow,
@@ -160,9 +187,28 @@ function memoryStore(): Store & { revision: number; changes: string[]; rollbacks
               }
             },
           },
+          plans: {
+            ...plansReader,
+            insert: (p) => void planRows.set(p.id, p),
+            updateIfVersion: (p, expected) => {
+              if (planRows.get(p.id)?.version !== expected) return false;
+              planRows.set(p.id, p);
+              return true;
+            },
+          },
+          proposals: {
+            ...proposalsReader,
+            insert: (p) => void proposalRows.set(p.id, p),
+            resolveIfPending: (p) => {
+              if (proposalRows.get(p.id)?.status !== "pending") return false;
+              proposalRows.set(p.id, p);
+              return true;
+            },
+          },
+          stateRevision: () => startRevision,
           recordChange: (c) => {
             state.changes.push(c.commandType);
-            state.revision++;
+            if (state.revision === startRevision) state.revision++;
             changeLogRows.push({
               id: `cl-${state.revision}`,
               timestamp: ctx.timestamp,

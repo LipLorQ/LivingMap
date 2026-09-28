@@ -15,7 +15,7 @@ import {
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MCP_TOOL_NAMES } from "../src/server";
+import { MCP_TOOL_NAMES, MCP_TOOLS } from "../src/server";
 
 const mcpDir = fileURLToPath(new URL("..", import.meta.url));
 
@@ -72,19 +72,43 @@ async function call<T>(client: Client, name: string, args: Record<string, unknow
 }
 
 describe("MCP surface", () => {
-  it("exposes exactly the whitelisted (read-only) tools — no product-domain writes yet (this stage's prompt §2/§19)", async () => {
+  it("exposes exactly the classified whitelist — no accept, direct domain write, SQL, file or policy tool", async () => {
     openDesktop();
     const client = await spawnMcp();
     const names = (await client.listTools()).tools.map((t) => t.name).sort();
     expect(names).toEqual([...MCP_TOOL_NAMES].sort());
-    for (const n of names) expect(n).not.toMatch(/sql|exec|raw|shell|file|migrat|delete|policy/i);
+    expect(
+      Object.entries(MCP_TOOLS)
+        .filter(([, c]) => c === "safe-write")
+        .map(([n]) => n),
+    ).toEqual(["reorder_existing_actions"]);
+    for (const n of names) {
+      expect(n).not.toMatch(
+        /sql|exec|raw|shell|file|migrat|delete|policy|accept|approve|confirm|reject|season|condition/i,
+      );
+    }
 
-    const unknown = await client.callTool({ name: "execute_sql", arguments: { sql: "select 1" } });
-    expect(unknown.isError).toBe(true);
-    for (const forbidden of ["create_intention", "complete_action", "add_stage"]) {
+    for (const forbidden of [
+      "execute_sql",
+      "raw_query",
+      "accept_proposal",
+      "create_intention",
+      "complete_action",
+      "add_stage",
+      "update_any_field",
+    ]) {
       const r = await client.callTool({ name: forbidden, arguments: {} });
       expect(r.isError).toBe(true);
     }
+  });
+
+  it("Zod-validates every input at the boundary (unknown keys, bad ids)", async () => {
+    openDesktop();
+    const client = await spawnMcp();
+    const extraKey = await call(client, "get_proposal", { id: "00000000-0000-4000-8000-000000000001", sql: "x" });
+    expect(extraKey).toMatchObject({ ok: false });
+    const badId = await call(client, "get_proposal", { id: "not-a-uuid" });
+    expect(badId).toMatchObject({ ok: false });
   });
 
   it("a corrupted database file fails the tool call gracefully instead of crashing the MCP process", async () => {
@@ -132,5 +156,78 @@ describe("desktop + separate MCP process share one SQLite", () => {
     app.commands.updateSeasonFocus(app.newContext("user-ui", "test"), { expectedVersion: 1, focus: "y" });
 
     expect(await call(client, "get_state_revision")).toEqual({ ok: true, value: { stateRevision: 2 } });
+  });
+});
+
+describe("AI brain over stdio: read → propose → user decides in desktop", () => {
+  it("an external MCP client reads the real planning context and can only propose; the desktop decides", async () => {
+    const app = openDesktop();
+    const ui = () => app.newContext("user-ui", "test");
+    const unwrap = <T>(r: Result<T>): T => {
+      if (!r.ok) throw new Error(r.error.message);
+      return r.value;
+    };
+    unwrap(app.commands.createSeason(ui(), { focus: "Rebuild momentum" }));
+    unwrap(app.commands.addGoodLifeCondition(ui(), { text: "Sleep 8 hours" }));
+    const intention = unwrap(app.commands.createIntention(ui(), { title: "Ship MVP", desiredResult: "Used daily" }));
+    const stage = unwrap(app.commands.addStage(ui(), { intentionId: intention.id, title: "Foundation" }));
+    const action = unwrap(app.commands.addAction(ui(), { stageId: stage.id, title: "Model", doneWhen: "tests" }));
+    unwrap(app.commands.blockAction(ui(), { id: action.id, expectedVersion: 1, reason: "waiting on review" }));
+
+    const client = await spawnMcp();
+    type Ctx = {
+      stateRevision: number;
+      meanings: Record<string, string>;
+      season: { focus: string };
+      goodLifeConditions: { text: string }[];
+      intention: { id: string; desiredResult: string };
+      stages: { actions: { status: string; blocker: { reason: string } | null }[] }[];
+      orderedActionPlan: unknown;
+    };
+    const ctx = unwrap(await call<Ctx>(client, "get_living_map_context"));
+    expect(ctx.season.focus).toBe("Rebuild momentum");
+    expect(ctx.goodLifeConditions.map((c) => c.text)).toEqual(["Sleep 8 hours"]);
+    expect(ctx.meanings.goodLifeConditions).toContain("Чем ты не хочешь жертвовать ради целей?");
+    expect(ctx.meanings.desiredResult).toContain("must become true");
+    expect(ctx.intention.desiredResult).toBe("Used daily");
+    expect(ctx.stages[0]?.actions[0]).toMatchObject({ status: "blocked", blocker: { reason: "waiting on review" } });
+    expect(ctx.orderedActionPlan).toBeNull();
+
+    // No safe reorder before an approved route.
+    expect(
+      await call(client, "reorder_existing_actions", {
+        intentionId: intention.id,
+        expectedPlanVersion: 1,
+        orderedActionIds: [action.id],
+        rationale: "x",
+      }),
+    ).toMatchObject({ ok: false, error: { code: "REQUIRES_CONFIRMATION" } });
+
+    const proposal = unwrap(
+      await call<{ id: string; status: string }>(client, "create_route_proposal", {
+        intentionId: intention.id,
+        expectedRevision: ctx.stateRevision,
+        rationale: "Unblock review first",
+        newActions: [{ ref: "ask", stage: stage.id, title: "Ask for review", doneWhen: "reviewer replied" }],
+        actionOrder: ["ask", action.id],
+      }),
+    );
+    expect(proposal.status).toBe("pending");
+
+    // Desktop sees it (revision moved), nothing applied yet.
+    const view = unwrap(app.queries.getCurrentView());
+    expect(view.pendingProposals.map((p) => p.id)).toEqual([proposal.id]);
+    expect(view.stages[0]?.actions).toHaveLength(1);
+
+    unwrap(app.commands.acceptProposal(ui(), { id: proposal.id }));
+    expect(await call(client, "get_proposal", { id: proposal.id })).toMatchObject({
+      ok: true,
+      value: { status: "accepted", resolvedBy: "user-ui" },
+    });
+    const after = unwrap(
+      await call<Ctx & { orderedActionPlan: { orderedActionIds: string[] } }>(client, "get_living_map_context"),
+    );
+    expect(after.orderedActionPlan.orderedActionIds).toHaveLength(2);
+    expect(after.orderedActionPlan.orderedActionIds[1]).toBe(action.id);
   });
 });

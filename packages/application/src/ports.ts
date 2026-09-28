@@ -4,6 +4,8 @@ import type {
   GoodLifeCondition,
   Instant,
   Intention,
+  OrderedActionPlan,
+  Proposal,
   Season,
   Stage,
   Version,
@@ -58,6 +60,7 @@ export interface StageReader {
 
 export interface StageRepository extends StageReader {
   insert(stage: Stage): void;
+  /** Persists title and position (a route proposal may change both). */
   updateIfVersion(stage: Stage, expectedVersion: Version): boolean;
   reorder(positions: ReadonlyMap<EntityId, number>, now: Instant): void;
   /**
@@ -79,6 +82,27 @@ export interface ActionRepository extends ActionReader {
   insert(action: Action): void;
   updateIfVersion(action: Action, expectedVersion: Version): boolean;
   reorder(positions: ReadonlyMap<EntityId, number>, now: Instant): void;
+}
+
+export interface OrderedActionPlanReader {
+  /** At most one plan per Intention. */
+  findByIntention(intentionId: EntityId): OrderedActionPlan | undefined;
+}
+
+export interface OrderedActionPlanRepository extends OrderedActionPlanReader {
+  insert(plan: OrderedActionPlan): void;
+  updateIfVersion(plan: OrderedActionPlan, expectedVersion: Version): boolean;
+}
+
+export interface ProposalReader {
+  findById(id: EntityId): Proposal | undefined;
+  listPending(): Proposal[];
+}
+
+export interface ProposalRepository extends ProposalReader {
+  insert(proposal: Proposal): void;
+  /** Persists status/resolvedAt/resolvedBy only if the stored row is still pending; false otherwise. */
+  resolveIfPending(proposal: Proposal): boolean;
 }
 
 /** Lightweight change-log entry (ARCHITECTURE §20); actor / correlation come from the command context. */
@@ -107,6 +131,8 @@ export interface ReadScope {
   intentions: IntentionReader;
   stages: StageReader;
   actions: ActionReader;
+  plans: OrderedActionPlanReader;
+  proposals: ProposalReader;
   changeLog: ChangeLogReader;
   stateRevision(): number;
 }
@@ -117,7 +143,14 @@ export interface WriteScope {
   intentions: IntentionRepository;
   stages: StageRepository;
   actions: ActionRepository;
-  /** Increments `state_revision`, appends to change log, returns the new revision. */
+  plans: OrderedActionPlanRepository;
+  proposals: ProposalRepository;
+  /** The committed revision this transaction started from (before its own bump). */
+  stateRevision(): number;
+  /**
+   * Appends to the change log. The first call in a transaction increments `state_revision`;
+   * later calls in the same transaction share that revision (one command = one revision bump).
+   */
   recordChange(change: ChangeRecord): number;
 }
 

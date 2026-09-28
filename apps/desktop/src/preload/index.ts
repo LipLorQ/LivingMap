@@ -29,6 +29,8 @@ const api: LivingMapApi = {
     unblockAction: (input) => ipcRenderer.invoke(IPC_CHANNELS.unblockAction, input),
     reopenAction: (input) => ipcRenderer.invoke(IPC_CHANNELS.reopenAction, input),
     reorderActions: (input) => ipcRenderer.invoke(IPC_CHANNELS.reorderActions, input),
+    acceptProposal: (input) => ipcRenderer.invoke(IPC_CHANNELS.acceptProposal, input),
+    rejectProposal: (input) => ipcRenderer.invoke(IPC_CHANNELS.rejectProposal, input),
   },
   events: {
     onStateChanged: (listener) => {

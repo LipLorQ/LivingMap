@@ -70,4 +70,10 @@ describe("dependency direction (ARCHITECTURE §6)", () => {
     const hits = sourceFiles("apps/mcp/src").filter((f) => forbidden.test(readFileSync(f, "utf8")));
     expect(hits.map((f) => relative(root, f))).toEqual([]);
   });
+
+  it("MCP app can never decide a proposal or act as the user (Stage 3, ADR-0004)", () => {
+    const forbidden = /\bacceptProposal\b|\brejectProposal\b|["']user-ui["']|["']system["']/;
+    const hits = sourceFiles("apps/mcp/src").filter((f) => forbidden.test(readFileSync(f, "utf8")));
+    expect(hits.map((f) => relative(root, f))).toEqual([]);
+  });
 });

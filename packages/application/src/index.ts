@@ -2,6 +2,7 @@ export type { Application } from "./application";
 export { createApplication } from "./application";
 export type { Actor, CommandContext, CommandSource } from "./context";
 export { createCommandContext } from "./context";
+export { PLANNING_MEANINGS } from "./planning";
 export type { CommandName } from "./policy";
 export { COMMAND_POLICY, isAllowed } from "./policy";
 export type {
@@ -16,6 +17,10 @@ export type {
   IdGenerator,
   IntentionReader,
   IntentionRepository,
+  OrderedActionPlanReader,
+  OrderedActionPlanRepository,
+  ProposalReader,
+  ProposalRepository,
   ReadScope,
   SeasonReader,
   SeasonRepository,

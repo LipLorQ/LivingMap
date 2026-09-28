@@ -41,6 +41,29 @@ export {
 } from "./good-life-condition";
 export type { CreateIntentionInput, IntentionDto, UpdateIntentionInput } from "./intention";
 export { CreateIntentionInputSchema, IntentionDtoSchema, UpdateIntentionInputSchema } from "./intention";
+export type { OrderedActionPlanDto, ReorderExistingActionsInput } from "./plan";
+export { OrderedActionPlanDtoSchema, RationaleSchema, ReorderExistingActionsInputSchema } from "./plan";
+export type {
+  CreateRouteProposalInput,
+  DesiredResultPayload,
+  GetProposalInput,
+  ProposalDto,
+  ProposeDesiredResultChangeInput,
+  ResolveProposalInput,
+  RoutePayload,
+  RoutePreviewDto,
+} from "./proposal";
+export {
+  CreateRouteProposalInputSchema,
+  DesiredResultPayloadSchema,
+  GetProposalInputSchema,
+  ProposalDtoSchema,
+  ProposalStatusSchema,
+  ProposeDesiredResultChangeInputSchema,
+  ResolveProposalInputSchema,
+  RoutePayloadSchema,
+  RoutePreviewDtoSchema,
+} from "./proposal";
 export type { CreateSeasonInput, SeasonDto, UpdateSeasonFocusInput } from "./season";
 export { CreateSeasonInputSchema, SeasonDtoSchema, UpdateSeasonFocusInputSchema } from "./season";
 export type { AddStageInput, EditStageInput, ReorderStagesInput, SetCurrentStageInput, StageDto } from "./stage";
@@ -53,5 +76,5 @@ export {
 } from "./stage";
 export type { StateRevisionDto } from "./state-revision";
 export { StateRevisionDtoSchema } from "./state-revision";
-export type { CurrentViewDto, StageWithActionsDto } from "./view";
-export { CurrentViewDtoSchema, StageWithActionsDtoSchema } from "./view";
+export type { CurrentViewDto, PlanningContextDto, StageWithActionsDto } from "./view";
+export { CurrentViewDtoSchema, PlanningContextDtoSchema, StageWithActionsDtoSchema } from "./view";
