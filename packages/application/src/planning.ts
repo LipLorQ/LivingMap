@@ -1,4 +1,6 @@
 import {
+  type CalendarSnapshotDto,
+  type CurrentActionDto,
   type DesiredResultPayload,
   DesiredResultPayloadSchema,
   type OrderedActionPlanDto,
@@ -12,11 +14,13 @@ import {
   applyRouteChange,
   type EntityId,
   type Instant,
+  type Intention,
   type OrderedActionPlan,
   type Proposal,
   planningFingerprint,
   type RouteChange,
   type Stage,
+  selectCurrentAction,
 } from "@living-map/domain";
 import type { ReadScope } from "./ports";
 
@@ -43,6 +47,10 @@ export const PLANNING_MEANINGS: Record<string, string> = {
   proposals:
     "pendingProposals are awaiting the user's decision. status=stale means LivingMap changed after the proposal was made; it can no longer be applied — reread the context and propose again if still relevant.",
   history: "recentHistory: meaningful changes, newest first. actor user-ui = the user, mcp-ai = an AI via MCP.",
+  currentAction:
+    "«Сейчас» — the one Action CurrentActionSelector picked as admissible right now (ARCHITECTURE §26). null with needsAiReplan=false means there is no active Intention yet; null with needsAiReplan=true means the order exists but nothing in it can be safely selected — propose a replan, do not invent a local order.",
+  calendarSnapshot:
+    "«Календарь» — read-only calendar snapshot (private iCal feed) LivingMap itself refreshed and stored. connected=false or a stale syncedAt means treat it as unavailable, not as ground truth.",
 };
 
 type PlanningScope = Pick<ReadScope, "season" | "goodLifeConditions" | "intentions" | "stages" | "actions" | "plans">;
@@ -77,6 +85,53 @@ export const toPlanDto = (plan: OrderedActionPlan): OrderedActionPlanDto => ({
   ...plan,
   orderedActionIds: [...plan.orderedActionIds],
 });
+
+/**
+ * Earliest not-yet-started, real (not all-day) event in the snapshot, or null — the selector's only
+ * calendar input. An all-day event's `start` is a UTC-midnight sort anchor, not a real time boundary
+ * (packages/integrations-ical-calendar): treating it as a hard constraint would be exactly the
+ * invented fit logic Stage 4 §5 forbids.
+ */
+function nextHardEventStart(snapshot: CalendarSnapshotDto, now: Instant): Instant | null {
+  const nowMs = new Date(now).getTime();
+  let earliest: Instant | null = null;
+  let earliestMs = Number.POSITIVE_INFINITY;
+  for (const event of snapshot.events) {
+    if (event.allDay) continue;
+    const startMs = new Date(event.start).getTime();
+    if (startMs >= nowMs && startMs < earliestMs) {
+      earliest = event.start;
+      earliestMs = startMs;
+    }
+  }
+  return earliest;
+}
+
+/**
+ * Derives `Сейчас` for the current-view query (ARCHITECTURE §26). Not a domain aggregate: it is a
+ * read-only projection recomputed on every read, never stored. No Intention yet is a distinct,
+ * calmer state from `needsAiReplan` — there is nothing to replan, just nothing started.
+ */
+export function computeCurrentAction(
+  intention: Intention | undefined,
+  actions: readonly Action[],
+  plan: OrderedActionPlan | undefined,
+  calendarSnapshot: CalendarSnapshotDto,
+  now: Instant,
+): { currentAction: CurrentActionDto | null; needsAiReplan: boolean } {
+  if (!intention) return { currentAction: null, needsAiReplan: false };
+  const selection = selectCurrentAction({
+    orderedActionIds: plan ? plan.orderedActionIds : null,
+    actions: actions.map((a) => ({ id: a.id, status: a.status })),
+    now,
+    nextHardEventStart: nextHardEventStart(calendarSnapshot, now),
+  });
+  if (selection.status === "needs-ai-replan") return { currentAction: null, needsAiReplan: true };
+  return {
+    currentAction: { actionId: selection.actionId, reason: selection.reason, planRationale: plan?.rationale ?? null },
+    needsAiReplan: false,
+  };
+}
 
 export function routeChangeFromPayload(p: RoutePayload): RouteChange {
   return {

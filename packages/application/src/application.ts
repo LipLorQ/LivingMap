@@ -4,6 +4,7 @@ import {
   type AddGoodLifeConditionInput,
   type AddStageInput,
   type BlockActionInput,
+  type CalendarSnapshotDto,
   type ChangeLogEntryDto,
   type CompleteActionInput,
   type CreateIntentionInput,
@@ -76,6 +77,7 @@ import {
 } from "@living-map/domain";
 import { type Actor, type CommandContext, type CommandSource, createCommandContext } from "./context";
 import {
+  computeCurrentAction,
   contextFingerprint,
   intentionTree,
   PLANNING_MEANINGS,
@@ -167,6 +169,8 @@ export function createApplication(deps: ApplicationDeps) {
     }
     const plan = intention ? s.plans.findByIntention(intention.id) : undefined;
     const now = clock.now();
+    const calendarSnapshot = s.calendar.get();
+    const { currentAction, needsAiReplan } = computeCurrentAction(intention, actions, plan, calendarSnapshot, now);
     return {
       season: season ? toSeasonDto(season) : null,
       goodLifeConditions: s.goodLifeConditions.list().map(toGoodLifeConditionDto),
@@ -178,6 +182,9 @@ export function createApplication(deps: ApplicationDeps) {
         .listPending()
         .map((p) => toProposalDto(s, p, now))
         .filter((p): p is ProposalDto => p !== undefined),
+      currentAction,
+      needsAiReplan,
+      calendarSnapshot,
     };
   }
 
@@ -1016,6 +1023,27 @@ export function createApplication(deps: ApplicationDeps) {
               summary: `v${plan.version}→v${next.value.version}`,
             });
             return ok(toPlanDto(next.value));
+          }),
+        ),
+
+      /**
+       * Persists a freshly fetched calendar snapshot (ARCHITECTURE §32). The desktop main process is
+       * the only caller: it fetches the private iCal feed itself, then hands the already-mapped DTO
+       * here — the actual HTTP call happens outside any write transaction (ARCHITECTURE §12
+       * forbids I/O inside `store.write`). mcp-ai has no path to this command (policy.ts).
+       */
+      saveCalendarSnapshot: (ctx: CommandContext, input: CalendarSnapshotDto): Result<CalendarSnapshotDto> =>
+        authorize("calendar.save", ctx) ??
+        guarded("saveCalendarSnapshot", () =>
+          transact(ctx, (s): Result<CalendarSnapshotDto> => {
+            s.calendar.save(input);
+            s.recordChange({
+              commandType: "calendar.save",
+              entityType: "calendar",
+              entityId: "calendar",
+              summary: !input.connected ? "disconnected" : input.lastError ? `error: ${input.lastError}` : "synced",
+            });
+            return ok(input);
           }),
         ),
     },

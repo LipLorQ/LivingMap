@@ -12,6 +12,7 @@ import {
   uuidGenerator,
 } from "@living-map/persistence-sqlite";
 import { app, BrowserWindow, dialog } from "electron";
+import { createCalendarOrchestrator } from "./calendar";
 import { registerIpcHandlers } from "./ipc";
 import { watchStateRevision } from "./revision-watcher";
 import { createMainWindow, isTrustedRendererFrame } from "./window";
@@ -55,7 +56,12 @@ app.whenReady().then(() => {
       console.error(`[living-map] ${operation} failed: ${error instanceof Error ? error.message : "unknown"}`),
   });
 
-  registerIpcHandlers(application, isTrustedRendererFrame);
+  const calendar = createCalendarOrchestrator(application, resolveDataHome());
+  registerIpcHandlers(application, isTrustedRendererFrame, calendar);
+  // Refresh on launch (Stage 4 §7/§20): a no-op when never connected; otherwise the renderer sees
+  // an up-to-date snapshot without the user having to press "Обновить" first. Fire-and-forget —
+  // does not delay window creation, and the revision watcher below picks up the result.
+  void calendar.refresh("system");
 
   // Picks up writes made by the MCP process (or anyone) and tells the renderer to re-query (ARCHITECTURE §15).
   const stopWatching = watchStateRevision(application, (change) => {

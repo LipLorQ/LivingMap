@@ -12,5 +12,9 @@ playwright-report/
 *.sqlite.tmp
 .omc/
 
+# Calendar feed secret (Stage 4, ADR-0005): defense in depth — this only ever lives under
+# LIVING_MAP_HOME, outside the repo, but a relative LIVING_MAP_HOME could resolve inside it.
+*.enc
+
 # local scratch
 .dev-app.log

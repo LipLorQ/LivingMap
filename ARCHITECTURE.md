@@ -1130,9 +1130,7 @@ MCP input
 
 ---
 
-# 32. Google Calendar boundary
-
-Реализация появляется позже, но граница определена сейчас.
+# 32. Calendar boundary
 
 ```ts
 interface CalendarProvider {
@@ -1140,9 +1138,9 @@ interface CalendarProvider {
 }
 ```
 
-Desktop владеет Google OAuth и refresh.
+**Реализовано на Этапе 4 (ADR-0005), уточнено при реальной проверке.** Живая проверка OAuth-подключения показала, что она требует Google Cloud billing/tax-профиль пользователя — неприемлемо для локального read-only MVP одного пользователя. Утверждённое продуктовое решение: Desktop читает Google Calendar через приватный "Закрытый адрес в формате iCal" пользователя (`@living-map/integrations-ical-calendar`), а не через Google OAuth/REST API. Сама граница `CalendarProvider` и её место в архитектуре не изменились: Desktop по-прежнему единолично владеет получением снимка и refresh; UI по-прежнему говорит «Google Calendar», потому что фид пользователя реально из Google Calendar — изменился только внутренний механизм получения данных. Подробности и обоснование — ADR-0005.
 
-MCP не обязан напрямую ходить в Google Calendar.
+MCP не обязан напрямую ходить во внешний календарь и не видит секретный адрес; он читает только уже сохранённый `CalendarSnapshot` через обычный planning context.
 
 ИИ читает календарный snapshot, сохранённый Живой картой, вместе с:
 
@@ -1156,16 +1154,19 @@ staleness
 
 Не притворяться, что календарь актуален.
 
+Будущая замена адаптера (Google OAuth API или другой источник) не должна менять поведение domain/application — только сам `CalendarProvider`.
+
 ---
 
-# 33. OAuth и секреты
+# 33. Секрет календаря
 
-Когда появится Google Calendar:
+Секрет, дающий read-доступ к внешнему календарю (OAuth refresh token ранее; приватный iCal URL сейчас, ADR-0005), подчиняется одним и тем же правилам:
 
-- OAuth tokens не хранить в renderer;
-- не хранить refresh token открытым текстом в обычной domain table;
-- использовать OS-protected storage / Electron safe storage или эквивалентный локальный secret adapter;
-- domain видит только CalendarSnapshot, не OAuth credentials.
+- не хранить в renderer, не возвращать renderer после сохранения;
+- не хранить открытым текстом в обычной domain table;
+- использовать OS-protected storage / Electron `safeStorage` или эквивалентный локальный secret adapter;
+- domain видит только `CalendarSnapshot`, не сам секрет;
+- MCP не получает секрет ни в каком виде.
 
 ---
 

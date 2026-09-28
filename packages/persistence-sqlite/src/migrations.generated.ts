@@ -47,5 +47,17 @@ export const MIGRATIONS: ReadonlyArray<{ tag: string; statements: readonly strin
     "statements": [
       "ALTER TABLE `proposals` ADD `summary` text DEFAULT '' NOT NULL;"
     ]
+  },
+  {
+    "tag": "0006_add_calendar_snapshot",
+    "statements": [
+      "CREATE TABLE `calendar_snapshot` (\n\t`id` integer PRIMARY KEY NOT NULL,\n\t`connected` integer NOT NULL,\n\t`synced_at` text,\n\t`source` text,\n\t`time_zone` text,\n\t`events` text NOT NULL,\n\t`last_error` text,\n\tCONSTRAINT \"calendar_snapshot_single_row\" CHECK(\"calendar_snapshot\".\"id\" = 1)\n);"
+    ]
+  },
+  {
+    "tag": "0007_seed_calendar_snapshot",
+    "statements": [
+      "-- Custom SQL migration: the single calendar snapshot row (ARCHITECTURE §32), disconnected until the user authorizes Google Calendar.\nINSERT INTO `calendar_snapshot` (`id`, `connected`, `synced_at`, `source`, `time_zone`, `events`, `last_error`) VALUES (1, 0, NULL, NULL, NULL, '[]', NULL);"
+    ]
   }
 ];

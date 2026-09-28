@@ -11,14 +11,18 @@ import type {
   StageWithActionsDto,
 } from "@living-map/contracts";
 import { useCallback, useEffect, useState } from "react";
+import { NowScreen } from "./now-screen";
 import { PlanSection, ProposalsSection, STALE_PROPOSAL_TEXT } from "./proposals";
 
-// Utilitarian product screen: clarity, correct behavior, quick editing, persistence — deliberately
-// not visually polished. AI proposals are reviewed here; no Now, no timer, no calendar.
+type Tab = "now" | "editor";
+
+// Stage 4: "Сейчас" is the default screen (execution interface); the previous utilitarian
+// editing screen moves behind a "Замысел" tab (direct editing / fallback, per Stage 4 §15).
 export function App() {
   const [view, setView] = useState<CurrentViewDto | null>(null);
   const [history, setHistory] = useState<ChangeLogEntryDto[]>([]);
   const [lastError, setLastError] = useState<AppError | null>(null);
+  const [tab, setTab] = useState<Tab>("now");
 
   const reload = useCallback(async () => {
     const [viewResult, historyResult] = await Promise.all([
@@ -48,8 +52,28 @@ export function App() {
 
   return (
     <main className="mx-auto max-w-3xl space-y-8 p-6 font-sans text-sm text-neutral-900">
-      <header>
+      <header className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Живая карта</h1>
+        <nav className="flex gap-2">
+          <button
+            type="button"
+            data-testid="nav-now"
+            aria-current={tab === "now"}
+            className={tab === "now" ? "font-semibold underline" : ""}
+            onClick={() => setTab("now")}
+          >
+            Сейчас
+          </button>
+          <button
+            type="button"
+            data-testid="nav-editor"
+            aria-current={tab === "editor"}
+            className={tab === "editor" ? "font-semibold underline" : ""}
+            onClick={() => setTab("editor")}
+          >
+            Замысел
+          </button>
+        </nav>
       </header>
 
       {lastError && (
@@ -64,67 +88,82 @@ export function App() {
         onReject={(id) => run(window.livingMap.commands.rejectProposal({ id }))}
       />
 
-      <SeasonSection
-        season={view.season}
-        onCreate={(focus) => run(window.livingMap.commands.createSeason({ focus }))}
-        onUpdate={(expectedVersion, focus) =>
-          run(window.livingMap.commands.updateSeasonFocus({ expectedVersion, focus }))
-        }
-      />
+      {tab === "now" ? (
+        <NowScreen
+          view={view}
+          onConnectCalendar={(icalUrl) => run(window.livingMap.commands.connectCalendar({ icalUrl }))}
+          onRefreshCalendar={() => run(window.livingMap.commands.refreshCalendar())}
+          onDisconnectCalendar={() => run(window.livingMap.commands.disconnectCalendar())}
+        />
+      ) : (
+        <>
+          <SeasonSection
+            season={view.season}
+            onCreate={(focus) => run(window.livingMap.commands.createSeason({ focus }))}
+            onUpdate={(expectedVersion, focus) =>
+              run(window.livingMap.commands.updateSeasonFocus({ expectedVersion, focus }))
+            }
+          />
 
-      <GoodLifeConditionsSection
-        conditions={view.goodLifeConditions}
-        onAdd={(text) => run(window.livingMap.commands.addGoodLifeCondition({ text }))}
-        onEdit={(id, expectedVersion, text) =>
-          run(window.livingMap.commands.editGoodLifeCondition({ id, expectedVersion, text }))
-        }
-        onRemove={(id, expectedVersion) =>
-          run(window.livingMap.commands.removeGoodLifeCondition({ id, expectedVersion }))
-        }
-        onReorder={(orderedIds) => run(window.livingMap.commands.reorderGoodLifeConditions({ orderedIds }))}
-      />
+          <GoodLifeConditionsSection
+            conditions={view.goodLifeConditions}
+            onAdd={(text) => run(window.livingMap.commands.addGoodLifeCondition({ text }))}
+            onEdit={(id, expectedVersion, text) =>
+              run(window.livingMap.commands.editGoodLifeCondition({ id, expectedVersion, text }))
+            }
+            onRemove={(id, expectedVersion) =>
+              run(window.livingMap.commands.removeGoodLifeCondition({ id, expectedVersion }))
+            }
+            onReorder={(orderedIds) => run(window.livingMap.commands.reorderGoodLifeConditions({ orderedIds }))}
+          />
 
-      <IntentionSection
-        intention={view.intention}
-        stages={view.stages}
-        plan={view.orderedActionPlan}
-        unplannedActionIds={view.unplannedActionIds}
-        onCreateIntention={(title, desiredResult) =>
-          run(window.livingMap.commands.createIntention({ title, desiredResult }))
-        }
-        onUpdateIntention={(id, expectedVersion, title, desiredResult) =>
-          run(window.livingMap.commands.updateIntention({ id, expectedVersion, title, desiredResult }))
-        }
-        onAddStage={(intentionId, title) => run(window.livingMap.commands.addStage({ intentionId, title }))}
-        onEditStage={(id, expectedVersion, title) =>
-          run(window.livingMap.commands.editStage({ id, expectedVersion, title }))
-        }
-        onReorderStages={(intentionId, orderedIds) =>
-          run(window.livingMap.commands.reorderStages({ intentionId, orderedIds }))
-        }
-        onSetCurrentStage={(intentionId, stageId) =>
-          run(window.livingMap.commands.setCurrentStage({ intentionId, stageId }))
-        }
-        onAddAction={(stageId, title, doneWhen) =>
-          run(window.livingMap.commands.addAction({ stageId, title, doneWhen }))
-        }
-        onEditAction={(id, expectedVersion, title, doneWhen) =>
-          run(window.livingMap.commands.editAction({ id, expectedVersion, title, doneWhen }))
-        }
-        onCompleteAction={(id, expectedVersion) =>
-          run(window.livingMap.commands.completeAction({ id, expectedVersion }))
-        }
-        onBlockAction={(id, expectedVersion, reason) =>
-          run(window.livingMap.commands.blockAction({ id, expectedVersion, reason }))
-        }
-        onUnblockAction={(id, expectedVersion) => run(window.livingMap.commands.unblockAction({ id, expectedVersion }))}
-        onReopenAction={(id, expectedVersion) => run(window.livingMap.commands.reopenAction({ id, expectedVersion }))}
-        onReorderActions={(stageId, orderedIds) =>
-          run(window.livingMap.commands.reorderActions({ stageId, orderedIds }))
-        }
-      />
+          <IntentionSection
+            intention={view.intention}
+            stages={view.stages}
+            plan={view.orderedActionPlan}
+            unplannedActionIds={view.unplannedActionIds}
+            onCreateIntention={(title, desiredResult) =>
+              run(window.livingMap.commands.createIntention({ title, desiredResult }))
+            }
+            onUpdateIntention={(id, expectedVersion, title, desiredResult) =>
+              run(window.livingMap.commands.updateIntention({ id, expectedVersion, title, desiredResult }))
+            }
+            onAddStage={(intentionId, title) => run(window.livingMap.commands.addStage({ intentionId, title }))}
+            onEditStage={(id, expectedVersion, title) =>
+              run(window.livingMap.commands.editStage({ id, expectedVersion, title }))
+            }
+            onReorderStages={(intentionId, orderedIds) =>
+              run(window.livingMap.commands.reorderStages({ intentionId, orderedIds }))
+            }
+            onSetCurrentStage={(intentionId, stageId) =>
+              run(window.livingMap.commands.setCurrentStage({ intentionId, stageId }))
+            }
+            onAddAction={(stageId, title, doneWhen) =>
+              run(window.livingMap.commands.addAction({ stageId, title, doneWhen }))
+            }
+            onEditAction={(id, expectedVersion, title, doneWhen) =>
+              run(window.livingMap.commands.editAction({ id, expectedVersion, title, doneWhen }))
+            }
+            onCompleteAction={(id, expectedVersion) =>
+              run(window.livingMap.commands.completeAction({ id, expectedVersion }))
+            }
+            onBlockAction={(id, expectedVersion, reason) =>
+              run(window.livingMap.commands.blockAction({ id, expectedVersion, reason }))
+            }
+            onUnblockAction={(id, expectedVersion) =>
+              run(window.livingMap.commands.unblockAction({ id, expectedVersion }))
+            }
+            onReopenAction={(id, expectedVersion) =>
+              run(window.livingMap.commands.reopenAction({ id, expectedVersion }))
+            }
+            onReorderActions={(stageId, orderedIds) =>
+              run(window.livingMap.commands.reorderActions({ stageId, orderedIds }))
+            }
+          />
 
-      <ChangeHistorySection entries={history} />
+          <ChangeHistorySection entries={history} />
+        </>
+      )}
     </main>
   );
 }

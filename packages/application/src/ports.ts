@@ -1,3 +1,4 @@
+import type { CalendarSnapshotDto } from "@living-map/contracts";
 import type {
   Action,
   EntityId,
@@ -94,6 +95,19 @@ export interface OrderedActionPlanRepository extends OrderedActionPlanReader {
   updateIfVersion(plan: OrderedActionPlan, expectedVersion: Version): boolean;
 }
 
+/**
+ * The LivingMap-owned calendar read model (ARCHITECTURE §32). Always returns a value — there is
+ * exactly one row, seeded disconnected — so callers never have to special-case "no snapshot yet".
+ */
+export interface CalendarSnapshotReader {
+  get(): CalendarSnapshotDto;
+}
+
+export interface CalendarSnapshotRepository extends CalendarSnapshotReader {
+  /** Wholesale replace (ARCHITECTURE §32): never edited piecemeal, no optimistic concurrency. */
+  save(snapshot: CalendarSnapshotDto): void;
+}
+
 export interface ProposalReader {
   findById(id: EntityId): Proposal | undefined;
   listPending(): Proposal[];
@@ -134,6 +148,7 @@ export interface ReadScope {
   plans: OrderedActionPlanReader;
   proposals: ProposalReader;
   changeLog: ChangeLogReader;
+  calendar: CalendarSnapshotReader;
   stateRevision(): number;
 }
 
@@ -145,6 +160,7 @@ export interface WriteScope {
   actions: ActionRepository;
   plans: OrderedActionPlanRepository;
   proposals: ProposalRepository;
+  calendar: CalendarSnapshotRepository;
   /** The committed revision this transaction started from — still the pre-bump value after recordChange. */
   stateRevision(): number;
   /**

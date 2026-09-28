@@ -349,3 +349,49 @@ describe("FK-safe migration lifecycle (ADR-0003)", () => {
     expect(readdirSync(backupsDir(home)).some((f) => f.startsWith("auto-"))).toBe(true);
   });
 });
+
+describe("calendar snapshot (ARCHITECTURE §32, Stage 4)", () => {
+  it("is seeded disconnected on a fresh database", () => {
+    const app = appOn(desktop());
+    const view = app.queries.getCurrentView();
+    if (!view.ok) throw new Error("expected ok");
+    expect(view.value.calendarSnapshot).toEqual({
+      connected: false,
+      syncedAt: null,
+      source: null,
+      timeZone: null,
+      events: [],
+      lastError: null,
+    });
+  });
+
+  it("a saved snapshot survives a real close/reopen of the database file", () => {
+    const synced = {
+      connected: true,
+      syncedAt: "2026-09-28T09:00:00.000Z",
+      source: "ical" as const,
+      timeZone: "Europe/Moscow",
+      events: [
+        {
+          id: "evt1",
+          title: "Созвон",
+          start: "2026-09-28T12:00:00.000Z",
+          end: "2026-09-28T12:30:00.000Z",
+          timeZone: "Europe/Moscow",
+          allDay: false,
+        },
+      ],
+      lastError: null,
+    };
+    const h = desktop();
+    const app = appOn(h);
+    const saved = app.commands.saveCalendarSnapshot(app.newContext("user-ui", "test"), synced);
+    expect(saved).toEqual({ ok: true, value: synced });
+    h.close();
+
+    const reopened = appOn(desktop());
+    const view = reopened.queries.getCurrentView();
+    if (!view.ok) throw new Error("expected ok");
+    expect(view.value.calendarSnapshot).toEqual(synced);
+  });
+});

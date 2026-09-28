@@ -97,6 +97,8 @@ test("Stage 3: an external AI proposal appears live, is reviewed in Russian, rej
   const app = await launch();
   const win = await app.firstWindow();
   await seed(win);
+  // Stage 4: manual/AI-route review lives behind the "Замысел" tab; "Сейчас" is the default screen.
+  await win.getByTestId("nav-editor").click();
   await expect(win.getByTestId("plan-empty")).toBeVisible();
   mcp = await connectMcp();
 
@@ -166,6 +168,7 @@ test("Stage 3: an external AI proposal appears live, is reviewed in Russian, rej
   await app.close();
   const again = await launch();
   const win2 = await again.firstWindow();
+  await win2.getByTestId("nav-editor").click();
   await expect(win2.getByTestId("stage")).toHaveCount(2);
   await expect(win2.getByTestId("plan-item")).toHaveText(["Поговорить с тремя людьми", "Описать доменную модель"]);
   await expect(win2.getByTestId("proposal")).toHaveCount(0);

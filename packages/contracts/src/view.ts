@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ActionDtoSchema } from "./action";
+import { CalendarSnapshotDtoSchema } from "./calendar";
 import { ChangeLogEntryDtoSchema } from "./change-log";
 import { GoodLifeConditionDtoSchema } from "./good-life-condition";
 import { IntentionDtoSchema } from "./intention";
@@ -11,6 +12,23 @@ import { StageDtoSchema } from "./stage";
 export const StageWithActionsDtoSchema = StageDtoSchema.extend({ actions: z.array(ActionDtoSchema) });
 export type StageWithActionsDto = z.infer<typeof StageWithActionsDtoSchema>;
 
+/** Local admissibility reason (ARCHITECTURE §28): why THIS action, not why the AI ordered it there. */
+export const WhyNowReasonSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("first-in-plan") }),
+  z.object({ kind: z.literal("previous-done") }),
+  z.object({ kind: z.literal("previous-blocked") }),
+]);
+export type WhyNowReasonDto = z.infer<typeof WhyNowReasonSchema>;
+
+/** The one Action CurrentActionSelector picked (ARCHITECTURE §26). Never present without a plan. */
+export const CurrentActionDtoSchema = z.object({
+  actionId: z.uuid(),
+  reason: WhyNowReasonSchema,
+  /** The plan's own rationale (ARCHITECTURE §28 strategic source) — per-action rationale is future work. */
+  planRationale: z.string().nullable(),
+});
+export type CurrentActionDto = z.infer<typeof CurrentActionDtoSchema>;
+
 /** The complete current-Intention view the UI needs in one query. */
 export const CurrentViewDtoSchema = z.object({
   season: SeasonDtoSchema.nullable(),
@@ -21,6 +39,11 @@ export const CurrentViewDtoSchema = z.object({
   /** Unfinished Actions the approved order does not cover (e.g. added manually afterwards). */
   unplannedActionIds: z.array(z.uuid()),
   pendingProposals: z.array(ProposalDtoSchema),
+  /** null while there is no active Intention yet — a distinct state from `needsAiReplan`. */
+  currentAction: CurrentActionDtoSchema.nullable(),
+  /** True when an Intention/plan exists but no Action in it can be safely selected as `Сейчас`. */
+  needsAiReplan: z.boolean(),
+  calendarSnapshot: CalendarSnapshotDtoSchema,
 });
 export type CurrentViewDto = z.infer<typeof CurrentViewDtoSchema>;
 

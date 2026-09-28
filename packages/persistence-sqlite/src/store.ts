@@ -1,6 +1,8 @@
 import type {
   ActionReader,
   ActionRepository,
+  CalendarSnapshotReader,
+  CalendarSnapshotRepository,
   ChangeLogReader,
   GoodLifeConditionReader,
   GoodLifeConditionRepository,
@@ -18,6 +20,7 @@ import type {
   Store,
 } from "@living-map/application";
 import { SchemaConflictError } from "@living-map/application";
+import type { CalendarSnapshotDto } from "@living-map/contracts";
 import type {
   Action,
   ActionStatus,
@@ -30,11 +33,12 @@ import type {
   Season,
   Stage,
 } from "@living-map/domain";
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import type { Db, SqliteHandle } from "./connection";
 import { EXPECTED_SCHEMA_VERSION } from "./migrate";
 import {
   actions,
+  calendarSnapshot,
   changeLog,
   goodLifeConditions,
   intentions,
@@ -329,11 +333,57 @@ function proposalRepository(q: Tx): ProposalRepository {
   };
 }
 
+function calendarSnapshotReader(q: Tx): CalendarSnapshotReader {
+  return {
+    get: (): CalendarSnapshotDto => {
+      const row = q.select().from(calendarSnapshot).where(eq(calendarSnapshot.id, 1)).get();
+      if (!row) throw new Error("calendar_snapshot row missing");
+      return {
+        connected: row.connected,
+        syncedAt: row.syncedAt,
+        source: row.source as CalendarSnapshotDto["source"],
+        timeZone: row.timeZone,
+        events: row.events,
+        lastError: row.lastError,
+      };
+    },
+  };
+}
+
+function calendarSnapshotRepository(q: Tx): CalendarSnapshotRepository {
+  return {
+    ...calendarSnapshotReader(q),
+    save: (snapshot: CalendarSnapshotDto) => {
+      q.update(calendarSnapshot)
+        .set({
+          connected: snapshot.connected,
+          syncedAt: snapshot.syncedAt,
+          source: snapshot.source,
+          timeZone: snapshot.timeZone,
+          events: [...snapshot.events],
+          lastError: snapshot.lastError,
+        })
+        .where(eq(calendarSnapshot.id, 1))
+        .run();
+    },
+  };
+}
+
 function changeLogReader(q: Tx): ChangeLogReader {
   return {
     // One command may log several entries under one revision; rowid keeps their insertion order.
+    // `calendar.save` fires on every launch and every manual refresh — routine, not a "meaningful
+    // change" (ARCHITECTURE §20) — so it is excluded here rather than flooding the AI's
+    // `recentHistory` context and the user-facing history feed; it is still recorded in the table for
+    // the state-revision bump and direct inspection.
     listRecent: (limit) =>
-      q.select().from(changeLog).orderBy(desc(changeLog.stateRevision), desc(sql`rowid`)).limit(limit).all(),
+      q
+        .select()
+        .from(changeLog)
+        .where(ne(changeLog.commandType, "calendar.save"))
+        .orderBy(desc(changeLog.stateRevision), desc(sql`rowid`))
+        .limit(limit)
+        .all(),
   };
 }
 
@@ -364,6 +414,7 @@ export function createSqliteStore(handle: SqliteHandle, ids: IdGenerator): Store
             plans: planReader(tx),
             proposals: proposalReader(tx),
             changeLog: changeLogReader(tx),
+            calendar: calendarSnapshotReader(tx),
             stateRevision: () => readRevision(tx),
           }),
         { behavior: "deferred" },
@@ -392,6 +443,7 @@ export function createSqliteStore(handle: SqliteHandle, ids: IdGenerator): Store
             actions: actionRepository(tx),
             plans: planRepository(tx),
             proposals: proposalRepository(tx),
+            calendar: calendarSnapshotRepository(tx),
             stateRevision: () => startRevision,
             recordChange: (change) => {
               if (revision === undefined) {

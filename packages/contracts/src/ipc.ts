@@ -5,8 +5,10 @@ import type {
   AddGoodLifeConditionInput,
   AddStageInput,
   BlockActionInput,
+  CalendarSnapshotDto,
   ChangeLogEntryDto,
   CompleteActionInput,
+  ConnectCalendarInput,
   CreateIntentionInput,
   CreateSeasonInput,
   CurrentViewDto,
@@ -59,6 +61,9 @@ export const IPC_CHANNELS = {
   reorderActions: "lm:command:reorderActions",
   acceptProposal: "lm:command:acceptProposal",
   rejectProposal: "lm:command:rejectProposal",
+  connectCalendar: "lm:command:connectCalendar",
+  refreshCalendar: "lm:command:refreshCalendar",
+  disconnectCalendar: "lm:command:disconnectCalendar",
   stateChanged: "lm:event:stateChanged",
 } as const;
 
@@ -90,6 +95,10 @@ export type LivingMapApi = {
     reorderActions(input: ReorderActionsInput): Promise<Result<ActionDto[]>>;
     acceptProposal(input: ResolveProposalInput): Promise<Result<ProposalDto>>;
     rejectProposal(input: ResolveProposalInput): Promise<Result<null>>;
+    /** Validates the private iCal feed URL by fetching it before saving (main process owns the fetch). */
+    connectCalendar(input: ConnectCalendarInput): Promise<Result<CalendarSnapshotDto>>;
+    refreshCalendar(): Promise<Result<CalendarSnapshotDto>>;
+    disconnectCalendar(): Promise<Result<CalendarSnapshotDto>>;
   };
   events: {
     /** Returns an unsubscribe function. */

@@ -121,6 +121,35 @@ export const orderedActionPlans = sqliteTable(
   ],
 );
 
+/** One event as stored in the snapshot below; shape mirrors `CalendarEventDto` (contracts). */
+export type CalendarEventRow = {
+  id: string;
+  title: string;
+  start: string;
+  end: string;
+  timeZone: string;
+  allDay: boolean;
+};
+
+/**
+ * LivingMap-owned read model of the external calendar (ARCHITECTURE §32), a singleton like `meta`.
+ * No `version`/optimistic concurrency: it is never edited by two actors, only wholesale-replaced by
+ * the desktop main process after a refresh — MCP and the UI only ever read it.
+ */
+export const calendarSnapshot = sqliteTable(
+  "calendar_snapshot",
+  {
+    id: integer("id").primaryKey(),
+    connected: integer("connected", { mode: "boolean" }).notNull(),
+    syncedAt: text("synced_at"),
+    source: text("source"),
+    timeZone: text("time_zone"),
+    events: text("events", { mode: "json" }).$type<CalendarEventRow[]>().notNull(),
+    lastError: text("last_error"),
+  },
+  (t) => [check("calendar_snapshot_single_row", sql`${t.id} = 1`)],
+);
+
 /**
  * AI proposals (ARCHITECTURE §23). `payload` is JSON validated against the typed contract schema
  * for `kind` by the application on creation and again before being applied — never trusted as is.

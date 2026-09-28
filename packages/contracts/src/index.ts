@@ -21,6 +21,8 @@ export {
   ReorderActionsInputSchema,
   UnblockActionInputSchema,
 } from "./action";
+export type { CalendarEventDto, CalendarSnapshotDto, ConnectCalendarInput } from "./calendar";
+export { CalendarEventDtoSchema, CalendarSnapshotDtoSchema, ConnectCalendarInputSchema } from "./calendar";
 export type { ChangeLogEntryDto, ListChangeHistoryInput } from "./change-log";
 export { ChangeLogEntryDtoSchema, ListChangeHistoryInputSchema } from "./change-log";
 export type { AppError, AppErrorCode, Result } from "./errors";
@@ -76,5 +78,17 @@ export {
 } from "./stage";
 export type { StateRevisionDto } from "./state-revision";
 export { StateRevisionDtoSchema } from "./state-revision";
-export type { CurrentViewDto, PlanningContextDto, StageWithActionsDto } from "./view";
-export { CurrentViewDtoSchema, PlanningContextDtoSchema, StageWithActionsDtoSchema } from "./view";
+export type {
+  CurrentActionDto,
+  CurrentViewDto,
+  PlanningContextDto,
+  StageWithActionsDto,
+  WhyNowReasonDto,
+} from "./view";
+export {
+  CurrentActionDtoSchema,
+  CurrentViewDtoSchema,
+  PlanningContextDtoSchema,
+  StageWithActionsDtoSchema,
+  WhyNowReasonSchema,
+} from "./view";

@@ -10,6 +10,8 @@ export {
   reopenAction,
   unblockAction,
 } from "./action";
+export type { CurrentActionSelection, SelectableAction, WhyNowReason } from "./current-action";
+export { selectCurrentAction } from "./current-action";
 export type { GoodLifeCondition } from "./good-life-condition";
 export { CONDITION_TEXT_MAX, createGoodLifeCondition, editGoodLifeCondition } from "./good-life-condition";
 export type { Intention } from "./intention";

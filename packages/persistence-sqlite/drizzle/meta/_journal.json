@@ -43,6 +43,20 @@
       "when": 1790566615784,
       "tag": "0005_add_proposal_summary",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1790568655511,
+      "tag": "0006_add_calendar_snapshot",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1790568662196,
+      "tag": "0007_seed_calendar_snapshot",
+      "breakpoints": true
     }
   ]
 }

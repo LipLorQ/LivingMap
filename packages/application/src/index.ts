@@ -10,6 +10,8 @@ export { COMMAND_POLICY, isAllowed } from "./policy";
 export type {
   ActionReader,
   ActionRepository,
+  CalendarSnapshotReader,
+  CalendarSnapshotRepository,
   ChangeLogEntry,
   ChangeLogReader,
   ChangeRecord,

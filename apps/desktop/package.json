@@ -13,6 +13,7 @@
   "dependencies": {
     "@living-map/application": "workspace:*",
     "@living-map/contracts": "workspace:*",
+    "@living-map/integrations-ical-calendar": "workspace:*",
     "@living-map/persistence-sqlite": "workspace:*",
     "better-sqlite3": "13.0.3",
     "react": "19.3.0",

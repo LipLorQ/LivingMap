@@ -34,6 +34,9 @@ export const COMMAND_POLICY = {
   "proposal.accept": ["user-ui", "system"],
   "proposal.reject": ["user-ui", "system"],
   "plan.reorder": ["mcp-ai", "system"],
+  // Google Calendar boundary (ARCHITECTURE §32/§18): only the desktop main process refreshes and
+  // persists the snapshot; mcp-ai is deliberately absent — the AI only ever reads it.
+  "calendar.save": ["user-ui", "system"],
 } as const satisfies Record<string, readonly Actor[]>;
 
 export type CommandName = keyof typeof COMMAND_POLICY;

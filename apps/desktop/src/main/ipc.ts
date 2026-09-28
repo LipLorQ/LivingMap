@@ -5,6 +5,7 @@ import {
   AddStageInputSchema,
   BlockActionInputSchema,
   CompleteActionInputSchema,
+  ConnectCalendarInputSchema,
   CreateIntentionInputSchema,
   CreateSeasonInputSchema,
   EditActionInputSchema,
@@ -27,6 +28,7 @@ import {
 import { IPC_CHANNELS } from "@living-map/contracts/ipc";
 import { ipcMain, type WebFrameMain } from "electron";
 import { z } from "zod";
+import type { CalendarOrchestrator } from "./calendar";
 
 type TrustCheck = (frame: WebFrameMain | null) => boolean;
 
@@ -34,11 +36,11 @@ type TrustCheck = (frame: WebFrameMain | null) => boolean;
  * The renderer is an untrusted boundary (ARCHITECTURE §30): every payload is re-validated here,
  * the sender frame is checked, and handlers only delegate to application use cases.
  */
-export function registerIpcHandlers(app: Application, isTrusted: TrustCheck): void {
+export function registerIpcHandlers(app: Application, isTrusted: TrustCheck, calendar: CalendarOrchestrator): void {
   function handle<S extends z.ZodType>(
     channel: string,
     schema: S | null,
-    run: (input: z.infer<S>) => Result<unknown>,
+    run: (input: z.infer<S>) => Result<unknown> | Promise<Result<unknown>>,
   ): void {
     ipcMain.handle(channel, (event, raw: unknown) => {
       if (!isTrusted(event.senderFrame)) return err("PERMISSION_DENIED", "Untrusted sender");
@@ -99,4 +101,10 @@ export function registerIpcHandlers(app: Application, isTrusted: TrustCheck): vo
   // The user's decision on an AI proposal. Only reachable from the desktop (never from MCP).
   handle(IPC_CHANNELS.acceptProposal, ResolveProposalInputSchema, (input) => app.commands.acceptProposal(ui(), input));
   handle(IPC_CHANNELS.rejectProposal, ResolveProposalInputSchema, (input) => app.commands.rejectProposal(ui(), input));
+
+  // Calendar (ARCHITECTURE §32): the HTTP fetch happens here, never inside a store write
+  // transaction — `calendar` persists the result through the normal saveCalendarSnapshot command.
+  handle(IPC_CHANNELS.connectCalendar, ConnectCalendarInputSchema, (input) => calendar.connect(input.icalUrl));
+  handle(IPC_CHANNELS.refreshCalendar, null, () => calendar.refresh());
+  handle(IPC_CHANNELS.disconnectCalendar, null, () => calendar.disconnect());
 }

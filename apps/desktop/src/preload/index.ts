@@ -31,6 +31,9 @@ const api: LivingMapApi = {
     reorderActions: (input) => ipcRenderer.invoke(IPC_CHANNELS.reorderActions, input),
     acceptProposal: (input) => ipcRenderer.invoke(IPC_CHANNELS.acceptProposal, input),
     rejectProposal: (input) => ipcRenderer.invoke(IPC_CHANNELS.rejectProposal, input),
+    connectCalendar: (input) => ipcRenderer.invoke(IPC_CHANNELS.connectCalendar, input),
+    refreshCalendar: () => ipcRenderer.invoke(IPC_CHANNELS.refreshCalendar),
+    disconnectCalendar: () => ipcRenderer.invoke(IPC_CHANNELS.disconnectCalendar),
   },
   events: {
     onStateChanged: (listener) => {

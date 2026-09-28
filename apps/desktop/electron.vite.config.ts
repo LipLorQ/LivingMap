@@ -4,7 +4,12 @@ import { defineConfig } from "electron-vite";
 
 // Workspace packages are TypeScript sources and must be bundled; everything else in
 // `dependencies` (notably the native better-sqlite3) stays external and is loaded at runtime.
-const workspacePackages = ["@living-map/application", "@living-map/contracts", "@living-map/persistence-sqlite"];
+const workspacePackages = [
+  "@living-map/application",
+  "@living-map/contracts",
+  "@living-map/integrations-ical-calendar",
+  "@living-map/persistence-sqlite",
+];
 
 export default defineConfig({
   main: {

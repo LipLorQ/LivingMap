@@ -1,3 +1,4 @@
+import type { CalendarSnapshotDto } from "@living-map/contracts";
 import type {
   Action,
   GoodLifeCondition,
@@ -22,6 +23,15 @@ function memoryStore(): Store & { revision: number; changes: string[]; rollbacks
   // here they only need to exist so the fake satisfies the scope ports.
   const planRows = new Map<string, OrderedActionPlan>();
   const proposalRows = new Map<string, Proposal>();
+  let calendarRow: CalendarSnapshotDto = {
+    connected: false,
+    syncedAt: null,
+    source: null,
+    timeZone: null,
+    events: [],
+    lastError: null,
+  };
+  const calendarReader = { get: () => calendarRow };
   const plansReader = { findByIntention: (iid: string) => [...planRows.values()].find((p) => p.intentionId === iid) };
   const proposalsReader = {
     findById: (id: string) => proposalRows.get(id),
@@ -65,6 +75,7 @@ function memoryStore(): Store & { revision: number; changes: string[]; rollbacks
         plans: plansReader,
         proposals: proposalsReader,
         changeLog: { listRecent: (limit) => changeLogRows.slice().reverse().slice(0, limit) },
+        calendar: calendarReader,
         stateRevision: () => state.revision,
       }) as T,
     write: <T>(ctx: Parameters<Store["write"]>[0], work: Parameters<Store["write"]>[1]) => {
@@ -76,6 +87,7 @@ function memoryStore(): Store & { revision: number; changes: string[]; rollbacks
         actionRows: new Map(actionRows),
         planRows: new Map(planRows),
         proposalRows: new Map(proposalRows),
+        calendarRow,
         revision: state.revision,
         changes: [...state.changes],
         changeLogRows: [...changeLogRows],
@@ -84,6 +96,7 @@ function memoryStore(): Store & { revision: number; changes: string[]; rollbacks
         return runWork(work);
       } catch (error) {
         seasonRow = snapshot.season;
+        calendarRow = snapshot.calendarRow;
         glc.clear();
         for (const [k, v] of snapshot.glc) glc.set(k, v);
         intentionRows.clear();
@@ -203,6 +216,12 @@ function memoryStore(): Store & { revision: number; changes: string[]; rollbacks
               if (proposalRows.get(p.id)?.status !== "pending") return false;
               proposalRows.set(p.id, p);
               return true;
+            },
+          },
+          calendar: {
+            get: () => calendarRow,
+            save: (snapshot) => {
+              calendarRow = snapshot;
             },
           },
           stateRevision: () => startRevision,
@@ -474,5 +493,112 @@ describe("change history", () => {
     const history = app.queries.listChangeHistory({ limit: 50 });
     if (!history.ok) throw new Error("expected ok");
     expect(history.value.map((h) => h.commandType)).toEqual(["season.updateFocus", "season.create"]);
+  });
+});
+
+describe("Сейчас / calendar (Stage 4)", () => {
+  const disconnected: CalendarSnapshotDto = {
+    connected: false,
+    syncedAt: null,
+    source: null,
+    timeZone: null,
+    events: [],
+    lastError: null,
+  };
+
+  it("no active Intention: currentAction is null and needsAiReplan is false (a distinct, calmer state)", () => {
+    const { app } = setup();
+    const view = app.queries.getCurrentView();
+    if (!view.ok) throw new Error("expected ok");
+    expect(view.value.currentAction).toBeNull();
+    expect(view.value.needsAiReplan).toBe(false);
+    expect(view.value.calendarSnapshot).toEqual(disconnected);
+  });
+
+  it("an Intention with an approved route but no plan yet: needsAiReplan (nothing to follow)", () => {
+    const { app } = setup();
+    const ui = app.newContext("user-ui", "test");
+    app.commands.createIntention(ui, { title: "x", desiredResult: "y" });
+    const view = app.queries.getCurrentView();
+    if (!view.ok) throw new Error("expected ok");
+    expect(view.value.currentAction).toBeNull();
+    expect(view.value.needsAiReplan).toBe(true);
+  });
+
+  it("selects the plan's first admissible action as currentAction and skips a done one", () => {
+    const { app } = setup();
+    const ui = app.newContext("user-ui", "test");
+    const ai = app.newContext("mcp-ai", "test");
+    const intention = app.commands.createIntention(ui, { title: "x", desiredResult: "y" });
+    if (!intention.ok) throw new Error(intention.error.message);
+    const proposal = app.commands.createRouteProposal(ai, {
+      intentionId: intention.value.id,
+      expectedRevision: 1,
+      summary: "first route",
+      rationale: "because",
+      newStages: [{ ref: "s1", title: "Stage 1" }],
+      stageEdits: [],
+      newActions: [
+        { ref: "a1", stage: "s1", title: "First", doneWhen: "done" },
+        { ref: "a2", stage: "s1", title: "Second", doneWhen: "done" },
+      ],
+      actionEdits: [],
+      actionOrder: ["a1", "a2"],
+    });
+    if (!proposal.ok) throw new Error(proposal.error.message);
+    const accepted = app.commands.acceptProposal(ui, { id: proposal.value.id });
+    if (!accepted.ok) throw new Error(accepted.error.message);
+
+    const firstView = app.queries.getCurrentView();
+    if (!firstView.ok) throw new Error("expected ok");
+    const firstActionId = firstView.value.stages[0]?.actions[0]?.id;
+    expect(firstView.value.currentAction).toEqual({
+      actionId: firstActionId,
+      reason: { kind: "first-in-plan" },
+      planRationale: firstView.value.orderedActionPlan?.rationale,
+    });
+    expect(firstView.value.needsAiReplan).toBe(false);
+
+    const completed = app.commands.completeAction(ui, { id: firstActionId as string, expectedVersion: 1 });
+    if (!completed.ok) throw new Error(completed.error.message);
+    const secondView = app.queries.getCurrentView();
+    if (!secondView.ok) throw new Error("expected ok");
+    const secondActionId = secondView.value.stages[0]?.actions[1]?.id;
+    expect(secondView.value.currentAction).toMatchObject({
+      actionId: secondActionId,
+      reason: { kind: "previous-done" },
+    });
+
+    // Blocking/completing the last remaining Action leaves nothing admissible: NeedsAIReplan.
+    const blocked = app.commands.blockAction(ui, {
+      id: secondActionId as string,
+      expectedVersion: 1,
+      reason: "waiting",
+    });
+    if (!blocked.ok) throw new Error(blocked.error.message);
+    const thirdView = app.queries.getCurrentView();
+    if (!thirdView.ok) throw new Error("expected ok");
+    expect(thirdView.value.currentAction).toBeNull();
+    expect(thirdView.value.needsAiReplan).toBe(true);
+  });
+
+  it("saveCalendarSnapshot is user-ui/system only; mcp-ai is denied and nothing is persisted", () => {
+    const { app } = setup();
+    const synced: CalendarSnapshotDto = {
+      connected: true,
+      syncedAt: "2026-09-27T09:00:00.000Z",
+      source: "ical",
+      timeZone: "Europe/Moscow",
+      events: [],
+      lastError: null,
+    };
+    const denied = app.commands.saveCalendarSnapshot(app.newContext("mcp-ai", "test"), synced);
+    expect(denied).toMatchObject({ ok: false, error: { code: "PERMISSION_DENIED" } });
+
+    const saved = app.commands.saveCalendarSnapshot(app.newContext("user-ui", "test"), synced);
+    expect(saved).toEqual({ ok: true, value: synced });
+    const view = app.queries.getCurrentView();
+    if (!view.ok) throw new Error("expected ok");
+    expect(view.value.calendarSnapshot).toEqual(synced);
   });
 });

@@ -52,6 +52,9 @@ test("Stage 2: one real Intention through the actual UI, surviving a restart", a
     api: ["commands", "events", "queries"],
   });
 
+  // Stage 4: manual editing moved behind the "Замысел" tab; "Сейчас" is the default screen.
+  await win.getByTestId("nav-editor").click();
+
   // 2. Season.
   await win.getByTestId("season-focus").fill("Recover and rebuild momentum");
   await win.getByTestId("season-save").click();
@@ -111,6 +114,7 @@ test("Stage 2: one real Intention through the actual UI, surviving a restart", a
   await app.close();
   const again = await launch();
   const win2 = await again.firstWindow();
+  await win2.getByTestId("nav-editor").click();
   await expect(win2.getByTestId("season-focus")).toHaveValue("Recover and rebuild momentum");
   await expect(win2.getByTestId("condition")).toHaveCount(1);
   await expect(win2.getByTestId("intention-title")).toHaveValue("Ship the Living Map MVP");
