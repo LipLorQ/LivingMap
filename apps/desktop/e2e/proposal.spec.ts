@@ -83,6 +83,7 @@ async function proposeRoute(): Promise<void> {
   await tool("create_route_proposal", {
     intentionId: ctx.intention.id,
     expectedRevision: ctx.stateRevision,
+    summary: "Проверить идею на людях перед тем, как строить дальше",
     rationale: "Сначала проверить идею на людях, потом строить",
     newStages: [{ ref: "check", title: "Проверка" }],
     newActions: [{ ref: "talk", stage: "check", title: "Поговорить с тремя людьми", doneWhen: "три заметки" }],
@@ -104,10 +105,22 @@ test("Stage 3: an external AI proposal appears live, is reviewed in Russian, rej
   const card = win.getByTestId("proposal");
   await expect(card).toBeVisible();
   await expect(card).toContainText("Предложение ИИ: Первый маршрут");
-  for (const label of ["Почему", "Что изменится", "Новый маршрут", "Порядок действий", "Подтвердить", "Отклонить"]) {
+  for (const label of [
+    "Зачем это",
+    "Подробнее о логике",
+    "Что изменится",
+    "Новый маршрут",
+    "Порядок действий",
+    "Подтвердить",
+    "Отклонить",
+  ]) {
     await expect(card).toContainText(label);
   }
-  await expect(card).toContainText("Сначала проверить идею на людях, потом строить");
+  await expect(card).toContainText("Проверить идею на людях перед тем, как строить дальше");
+  // Detailed rationale is collapsed by default, expandable on demand.
+  await expect(win.getByTestId("proposal-rationale")).toBeHidden();
+  await card.getByText("Подробнее о логике").click();
+  await expect(win.getByTestId("proposal-rationale")).toContainText("Сначала проверить идею на людях, потом строить");
   await expect(win.getByTestId("proposal-stage")).toHaveCount(2);
   await expect(win.getByTestId("proposal-stage").first()).toContainText("Проверка");
   await expect(win.getByTestId("proposal-order")).toContainText("Поговорить с тремя людьми");

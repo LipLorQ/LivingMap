@@ -125,6 +125,7 @@ describe("Proposal status transitions", () => {
     baseFingerprint: "x",
     affectedEntityIds: [],
     payload: {},
+    summary: "why",
     rationale: "because",
     resolvedAt: null,
     resolvedBy: null,

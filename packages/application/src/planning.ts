@@ -157,6 +157,7 @@ export function toProposalDto(s: PlanningScope, proposal: Proposal, now: Instant
     createdAt: proposal.createdAt,
     baseRevision: proposal.baseRevision,
     affectedEntityIds: [...proposal.affectedEntityIds],
+    summary: proposal.summary,
     rationale: proposal.rationale,
     resolvedAt: proposal.resolvedAt,
     resolvedBy: proposal.resolvedBy,

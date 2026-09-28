@@ -134,10 +134,17 @@ function ProposalCard({
         </p>
       )}
 
-      <h3 className="font-semibold">Почему</h3>
-      <p data-testid="proposal-rationale" className="whitespace-pre-wrap">
-        {proposal.rationale}
+      <h3 className="font-semibold">Зачем это</h3>
+      <p data-testid="proposal-summary-text" className="whitespace-pre-wrap">
+        {proposal.summary}
       </p>
+
+      <details>
+        <summary className="cursor-pointer font-medium text-neutral-600">Подробнее о логике</summary>
+        <p data-testid="proposal-rationale" className="whitespace-pre-wrap">
+          {proposal.rationale}
+        </p>
+      </details>
 
       {!stale && (
         <div className="space-y-2">

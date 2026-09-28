@@ -1,0 +1,1 @@
+ALTER TABLE `proposals` ADD `summary` text DEFAULT '' NOT NULL;

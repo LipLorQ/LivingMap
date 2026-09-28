@@ -8,6 +8,7 @@ const StageTitle = z.string().trim().min(1).max(200);
 const ActionTitle = z.string().trim().min(1).max(200);
 const DoneWhen = z.string().trim().max(500);
 const DesiredResult = z.string().trim().max(2000);
+const Summary = z.string().trim().min(1).max(280);
 
 /** A temporary name for an entity the proposal creates. At most 32 chars, so it can never be a UUID. */
 const Ref = z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,31}$/, "ref: letter, then letters/digits/_/-, max 32 chars");
@@ -19,7 +20,12 @@ const IdOrRef = z.union([Id, Ref]);
 export const CreateRouteProposalInputSchema = z.strictObject({
   intentionId: Id,
   expectedRevision: Revision.describe("stateRevision from get_living_map_context; a mismatch returns CONFLICT_RELOAD"),
-  rationale: RationaleSchema.describe("Why this route: shown to the user as «Почему»"),
+  summary: Summary.describe(
+    "Short, plain-language reason to accept (2-4 lines): what this helps accomplish and why it's the useful next step. Shown by default as «Зачем это». No IDs, round numbers or implementation detail.",
+  ),
+  rationale: RationaleSchema.describe(
+    "Full detailed reasoning, shown collapsed as «Подробнее о логике» for transparency/audit.",
+  ),
   newStages: z
     .array(z.strictObject({ ref: Ref, title: StageTitle }))
     .max(20)
@@ -63,7 +69,10 @@ export const ProposeDesiredResultChangeInputSchema = z.strictObject({
   intentionId: Id,
   expectedRevision: Revision,
   desiredResult: DesiredResult.describe("What must become true for the Intention to count as embodied/completed"),
-  rationale: RationaleSchema,
+  summary: Summary.describe("Short, plain-language reason to accept, shown by default as «Зачем это»"),
+  rationale: RationaleSchema.describe(
+    "Full detailed reasoning, shown collapsed as «Подробнее о логике» for transparency/audit.",
+  ),
 });
 export type ProposeDesiredResultChangeInput = z.infer<typeof ProposeDesiredResultChangeInputSchema>;
 
@@ -133,6 +142,7 @@ const ProposalBase = z.object({
   createdAt: z.iso.datetime(),
   baseRevision: Revision,
   affectedEntityIds: z.array(Id),
+  summary: z.string(),
   rationale: z.string(),
   resolvedAt: z.iso.datetime().nullable(),
   resolvedBy: z.string().nullable(),

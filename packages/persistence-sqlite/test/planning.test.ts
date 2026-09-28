@@ -77,6 +77,7 @@ function routeInput(app: Application, seed: ReturnType<typeof seedIntention>): C
   return {
     intentionId: seed.intention.id,
     expectedRevision: unwrap(app.queries.getStateRevision()).stateRevision,
+    summary: "Validate before polishing further",
     rationale: "Validate with real users before polishing",
     newStages: [{ ref: "validate", title: "Validation" }],
     stageEdits: [{ stageId: seed.stage.id, title: "Foundation (core)" }],
@@ -357,6 +358,7 @@ describe("route proposal lifecycle (desktop + MCP connections)", () => {
         intentionId: seed.intention.id,
         expectedRevision: unwrap(mcp.queries.getStateRevision()).stateRevision,
         desiredResult: "Used daily for 7 days",
+        summary: "Make the result measurable",
         rationale: "Measurable",
       }),
     );
@@ -415,6 +417,7 @@ describe("route proposal lifecycle (desktop + MCP connections)", () => {
         intentionId: seed.intention.id,
         expectedRevision: unwrap(mcp.queries.getStateRevision()).stateRevision,
         desiredResult: "  Used daily for 7 days  ",
+        summary: "Make it measurable",
         rationale: "Make it measurable",
       }),
     );

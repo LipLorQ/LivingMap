@@ -41,5 +41,11 @@ export const MIGRATIONS: ReadonlyArray<{ tag: string; statements: readonly strin
       "CREATE TABLE `proposals` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`kind` text NOT NULL,\n\t`status` text NOT NULL,\n\t`created_by` text NOT NULL,\n\t`created_at` text NOT NULL,\n\t`base_revision` integer NOT NULL,\n\t`base_fingerprint` text NOT NULL,\n\t`affected_entity_ids` text NOT NULL,\n\t`payload` text NOT NULL,\n\t`rationale` text NOT NULL,\n\t`resolved_at` text,\n\t`resolved_by` text\n);",
       "CREATE INDEX `proposals_status_idx` ON `proposals` (`status`);"
     ]
+  },
+  {
+    "tag": "0005_add_proposal_summary",
+    "statements": [
+      "ALTER TABLE `proposals` ADD `summary` text DEFAULT '' NOT NULL;"
+    ]
   }
 ];

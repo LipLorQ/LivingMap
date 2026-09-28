@@ -21,12 +21,16 @@ export type Proposal = {
   readonly baseFingerprint: string;
   readonly affectedEntityIds: readonly EntityId[];
   readonly payload: unknown;
+  /** Short decision-oriented explanation shown by default («Зачем это»). */
+  readonly summary: string;
+  /** Full reasoning, shown collapsed for transparency/audit («Подробнее о логике»). */
   readonly rationale: string;
   readonly resolvedAt: Instant | null;
   readonly resolvedBy: string | null;
 };
 
 export const PROPOSAL_RATIONALE_MAX = 4000;
+export const PROPOSAL_SUMMARY_MAX = 280;
 export const MAX_PENDING_PROPOSALS = 10;
 
 export function createProposal(input: {
@@ -37,9 +41,15 @@ export function createProposal(input: {
   baseFingerprint: string;
   affectedEntityIds: readonly EntityId[];
   payload: unknown;
+  summary: string;
   rationale: string;
   now: Instant;
 }): DomainResult<Proposal> {
+  const summary = input.summary.trim();
+  if (summary.length === 0) return { ok: false, reason: "Proposal summary must not be empty" };
+  if (summary.length > PROPOSAL_SUMMARY_MAX) {
+    return { ok: false, reason: `Proposal summary must be at most ${PROPOSAL_SUMMARY_MAX} characters` };
+  }
   const rationale = input.rationale.trim();
   if (rationale.length === 0) return { ok: false, reason: "Proposal rationale must not be empty" };
   if (rationale.length > PROPOSAL_RATIONALE_MAX) {
@@ -57,6 +67,7 @@ export function createProposal(input: {
       baseFingerprint: input.baseFingerprint,
       affectedEntityIds: [...new Set(input.affectedEntityIds)],
       payload: input.payload,
+      summary,
       rationale,
       resolvedAt: null,
       resolvedBy: null,

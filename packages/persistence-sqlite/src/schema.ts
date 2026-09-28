@@ -138,6 +138,7 @@ export const proposals = sqliteTable(
     baseFingerprint: text("base_fingerprint").notNull(),
     affectedEntityIds: text("affected_entity_ids", { mode: "json" }).$type<string[]>().notNull(),
     payload: text("payload", { mode: "json" }).$type<unknown>().notNull(),
+    summary: text("summary").notNull().default(""),
     rationale: text("rationale").notNull(),
     resolvedAt: text("resolved_at"),
     resolvedBy: text("resolved_by"),

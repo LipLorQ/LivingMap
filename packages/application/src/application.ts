@@ -216,7 +216,14 @@ export function createApplication(deps: ApplicationDeps) {
   function insertProposal(
     s: WriteScope,
     ctx: CommandContext,
-    input: { kind: Proposal["kind"]; intentionId: string; payload: unknown; affected: string[]; rationale: string },
+    input: {
+      kind: Proposal["kind"];
+      intentionId: string;
+      payload: unknown;
+      affected: string[];
+      summary: string;
+      rationale: string;
+    },
   ): Result<ProposalDto> {
     // Pending proposals that can no longer apply (stale or unreadable) are persisted as stale first,
     // so they neither occupy the pending limit nor linger invisibly.
@@ -238,6 +245,7 @@ export function createApplication(deps: ApplicationDeps) {
       baseFingerprint: contextFingerprint(s, input.intentionId),
       affectedEntityIds: [input.intentionId, ...input.affected],
       payload: input.payload,
+      summary: input.summary,
       rationale: input.rationale,
       now: clock.now(),
     });
@@ -845,6 +853,7 @@ export function createApplication(deps: ApplicationDeps) {
               intentionId: input.intentionId,
               payload,
               affected,
+              summary: input.summary,
               rationale: input.rationale,
             });
           }),
@@ -877,6 +886,7 @@ export function createApplication(deps: ApplicationDeps) {
                 previousDesiredResult: intention.desiredResult,
               },
               affected: [],
+              summary: input.summary,
               rationale: input.rationale,
             });
           }),

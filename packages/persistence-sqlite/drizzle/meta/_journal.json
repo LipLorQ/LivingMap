@@ -36,6 +36,13 @@
       "when": 1790558191534,
       "tag": "0004_add_plans_and_proposals",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1790566615784,
+      "tag": "0005_add_proposal_summary",
+      "breakpoints": true
     }
   ]
 }

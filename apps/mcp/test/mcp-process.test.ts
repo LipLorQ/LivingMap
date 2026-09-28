@@ -208,6 +208,7 @@ describe("AI brain over stdio: read → propose → user decides in desktop", ()
       await call<{ id: string; status: string }>(client, "create_route_proposal", {
         intentionId: intention.id,
         expectedRevision: ctx.stateRevision,
+        summary: "Unblock review first",
         rationale: "Unblock review first",
         newActions: [{ ref: "ask", stage: stage.id, title: "Ask for review", doneWhen: "reviewer replied" }],
         actionOrder: ["ask", action.id],
