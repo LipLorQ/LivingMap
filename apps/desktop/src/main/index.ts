@@ -1,5 +1,7 @@
 // Desktop composition root (ARCHITECTURE §9): config/path → SQLite connection (+ migrations)
 // → repositories → application services → IPC handlers.
+
+import { join } from "node:path";
 import { createApplication } from "@living-map/application";
 import { IPC_CHANNELS } from "@living-map/contracts/ipc";
 import {
@@ -11,11 +13,12 @@ import {
   systemClock,
   uuidGenerator,
 } from "@living-map/persistence-sqlite";
-import { app, BrowserWindow, dialog } from "electron";
+import { app, BrowserWindow, dialog, powerMonitor } from "electron";
 import { createCalendarOrchestrator } from "./calendar";
 import { registerIpcHandlers } from "./ipc";
 import { watchStateRevision } from "./revision-watcher";
 import { createMainWindow, isTrustedRendererFrame } from "./window";
+import { manageWorkLifecycle } from "./work-lifecycle";
 
 /**
  * Distinguishes storage failure modes for the user-facing dialog (never a raw stack trace or
@@ -44,7 +47,20 @@ function openDatabaseOrExit(): SqliteHandle | undefined {
   }
 }
 
+// One process per database: a second launch must not "crash-recover" the first one's running work.
+// Electron keys the lock by userData, so an overridden data home (tests) gets its own.
+if (process.env.LIVING_MAP_HOME?.trim()) app.setPath("userData", join(resolveDataHome(), "electron"));
+const isPrimaryInstance = app.requestSingleInstanceLock();
+if (!isPrimaryInstance) app.quit();
+app.on("second-instance", () => {
+  const win = BrowserWindow.getAllWindows()[0];
+  if (!win) return;
+  if (win.isMinimized()) win.restore();
+  win.focus();
+});
+
 app.whenReady().then(() => {
+  if (!isPrimaryInstance) return;
   const handle = openDatabaseOrExit();
   if (!handle) return;
 
@@ -55,6 +71,9 @@ app.whenReady().then(() => {
     reportError: (operation, error) =>
       console.error(`[living-map] ${operation} failed: ${error instanceof Error ? error.message : "unknown"}`),
   });
+
+  // Before any window: a running interval left by a crash is capped and paused first.
+  const pauseWorkOnQuit = manageWorkLifecycle(application, powerMonitor);
 
   const calendar = createCalendarOrchestrator(application, resolveDataHome());
   registerIpcHandlers(application, isTrustedRendererFrame, calendar);
@@ -73,6 +92,7 @@ app.whenReady().then(() => {
   app.on("window-all-closed", () => app.quit());
   app.on("will-quit", () => {
     stopWatching();
+    pauseWorkOnQuit();
     handle.close();
   });
 });

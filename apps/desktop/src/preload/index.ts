@@ -34,6 +34,9 @@ const api: LivingMapApi = {
     connectCalendar: (input) => ipcRenderer.invoke(IPC_CHANNELS.connectCalendar, input),
     refreshCalendar: () => ipcRenderer.invoke(IPC_CHANNELS.refreshCalendar),
     disconnectCalendar: () => ipcRenderer.invoke(IPC_CHANNELS.disconnectCalendar),
+    startWork: (input) => ipcRenderer.invoke(IPC_CHANNELS.startWork, input),
+    pauseWork: (input) => ipcRenderer.invoke(IPC_CHANNELS.pauseWork, input),
+    setDailyWorkTarget: (input) => ipcRenderer.invoke(IPC_CHANNELS.setDailyWorkTarget, input),
   },
   events: {
     onStateChanged: (listener) => {

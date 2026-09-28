@@ -28,9 +28,13 @@ export type {
   ReadScope,
   SeasonReader,
   SeasonRepository,
+  SettingsReader,
+  SettingsRepository,
   StageReader,
   StageRepository,
   Store,
+  WorkIntervalReader,
+  WorkIntervalRepository,
   WriteContextMeta,
   WriteScope,
 } from "./ports";

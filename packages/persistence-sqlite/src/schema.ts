@@ -121,6 +121,39 @@ export const orderedActionPlans = sqliteTable(
   ],
 );
 
+/**
+ * Continuous periods of real work (Stage 5). `ended_at IS NULL` = running; the partial unique index
+ * makes "at most one running interval globally" a database fact, not just an application check.
+ * `last_heartbeat_at` is technical crash-recovery metadata, updated outside the change log.
+ */
+export const workIntervals = sqliteTable(
+  "work_intervals",
+  {
+    id: text("id").primaryKey(),
+    actionId: text("action_id").notNull(),
+    startedAt: text("started_at").notNull(),
+    endedAt: text("ended_at"),
+    lastHeartbeatAt: text("last_heartbeat_at").notNull(),
+    timeZone: text("time_zone").notNull(),
+  },
+  (t) => [
+    index("work_intervals_action_idx").on(t.actionId),
+    index("work_intervals_started_idx").on(t.startedAt),
+    uniqueIndex("work_intervals_one_running_idx").on(sql`(1)`).where(sql`${t.endedAt} IS NULL`),
+    foreignKey({ columns: [t.actionId], foreignColumns: [actions.id] }).onDelete("cascade"),
+  ],
+);
+
+/** Single-row user settings. The daily work target is a changeable setting, not a domain constant. */
+export const settings = sqliteTable(
+  "settings",
+  {
+    id: integer("id").primaryKey(),
+    dailyWorkTargetMinutes: integer("daily_work_target_minutes").notNull(),
+  },
+  (t) => [check("settings_single_row", sql`${t.id} = 1`)],
+);
+
 /** One event as stored in the snapshot below; shape mirrors `CalendarEventDto` (contracts). */
 export type CalendarEventRow = {
   id: string;

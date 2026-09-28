@@ -8,6 +8,7 @@ import { OrderedActionPlanDtoSchema } from "./plan";
 import { ProposalDtoSchema } from "./proposal";
 import { SeasonDtoSchema } from "./season";
 import { StageDtoSchema } from "./stage";
+import { ExecutionDtoSchema } from "./work";
 
 export const StageWithActionsDtoSchema = StageDtoSchema.extend({ actions: z.array(ActionDtoSchema) });
 export type StageWithActionsDto = z.infer<typeof StageWithActionsDtoSchema>;
@@ -17,6 +18,8 @@ export const WhyNowReasonSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("first-in-plan") }),
   z.object({ kind: z.literal("previous-done") }),
   z.object({ kind: z.literal("previous-blocked") }),
+  /** Work on it is running right now: the card never jumps away from running work. */
+  z.object({ kind: z.literal("working") }),
 ]);
 export type WhyNowReasonDto = z.infer<typeof WhyNowReasonSchema>;
 
@@ -44,6 +47,7 @@ export const CurrentViewDtoSchema = z.object({
   /** True when an Intention/plan exists but no Action in it can be safely selected as `Сейчас`. */
   needsAiReplan: z.boolean(),
   calendarSnapshot: CalendarSnapshotDtoSchema,
+  execution: ExecutionDtoSchema,
 });
 export type CurrentViewDto = z.infer<typeof CurrentViewDtoSchema>;
 

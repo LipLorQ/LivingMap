@@ -34,6 +34,18 @@ export { createSeason, SEASON_FOCUS_MAX, updateSeasonFocus } from "./season";
 export type { Stage } from "./stage";
 export { createStage, editStageTitle, isCurrentStageUnambiguous, STAGE_TITLE_MAX } from "./stage";
 export type { DomainResult, EntityId, Instant, Version } from "./types";
+export type { WorkInterval } from "./work";
+export {
+  addDays,
+  closeAt,
+  isSilent,
+  localDate,
+  startOfLocalDay,
+  totalWorkedMs,
+  WORK_HEARTBEAT_GAP_MS,
+  weekStart,
+  workedMsBetweenDates,
+} from "./work";
 
 /** Optimistic concurrency check shared by every aggregate above (ARCHITECTURE §13). */
 export function isAtVersion(entity: { version: number }, expected: number): boolean {

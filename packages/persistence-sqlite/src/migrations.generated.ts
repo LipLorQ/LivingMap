@@ -59,5 +59,21 @@ export const MIGRATIONS: ReadonlyArray<{ tag: string; statements: readonly strin
     "statements": [
       "-- Custom SQL migration: the single calendar snapshot row (ARCHITECTURE §32), disconnected until the user authorizes Google Calendar.\nINSERT INTO `calendar_snapshot` (`id`, `connected`, `synced_at`, `source`, `time_zone`, `events`, `last_error`) VALUES (1, 0, NULL, NULL, NULL, '[]', NULL);"
     ]
+  },
+  {
+    "tag": "0008_add_work_intervals",
+    "statements": [
+      "CREATE TABLE `settings` (\n\t`id` integer PRIMARY KEY NOT NULL,\n\t`daily_work_target_minutes` integer NOT NULL,\n\tCONSTRAINT \"settings_single_row\" CHECK(\"settings\".\"id\" = 1)\n);",
+      "CREATE TABLE `work_intervals` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`action_id` text NOT NULL,\n\t`started_at` text NOT NULL,\n\t`ended_at` text,\n\t`last_heartbeat_at` text NOT NULL,\n\t`time_zone` text NOT NULL,\n\tFOREIGN KEY (`action_id`) REFERENCES `actions`(`id`) ON UPDATE no action ON DELETE cascade\n);",
+      "CREATE INDEX `work_intervals_action_idx` ON `work_intervals` (`action_id`);",
+      "CREATE INDEX `work_intervals_started_idx` ON `work_intervals` (`started_at`);",
+      "CREATE UNIQUE INDEX `work_intervals_one_running_idx` ON `work_intervals` ((1)) WHERE \"work_intervals\".\"ended_at\" IS NULL;"
+    ]
+  },
+  {
+    "tag": "0009_seed_settings",
+    "statements": [
+      "-- Custom SQL migration: the single settings row; the daily work target starts at 6 hours (DEVELOPMENT_PLAN §4.4) and is user-changeable.\nINSERT INTO `settings` (`id`, `daily_work_target_minutes`) VALUES (1, 360);"
+    ]
   }
 ];

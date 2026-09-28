@@ -37,6 +37,11 @@ export const COMMAND_POLICY = {
   // Google Calendar boundary (ARCHITECTURE §32/§18): only the desktop main process refreshes and
   // persists the snapshot; mcp-ai is deliberately absent — the AI only ever reads it.
   "calendar.save": ["user-ui", "system"],
+  // Execution (Stage 5): direct user actions only. mcp-ai may read execution facts, never control them.
+  "work.start": ["user-ui", "system"],
+  "work.pause": ["user-ui", "system"],
+  "work.recover": ["system"],
+  "settings.dailyWorkTarget": ["user-ui", "system"],
 } as const satisfies Record<string, readonly Actor[]>;
 
 export type CommandName = keyof typeof COMMAND_POLICY;

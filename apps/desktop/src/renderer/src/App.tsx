@@ -38,11 +38,20 @@ export function App() {
     return window.livingMap.events.onStateChanged(() => void reload());
   }, [reload]);
 
+  // While running, re-read authoritative figures each minute: no drift, and today rolls over at midnight.
+  const running = view?.execution.state === "running";
+  useEffect(() => {
+    if (!running) return;
+    const id = setInterval(() => void reload(), 60_000);
+    return () => clearInterval(id);
+  }, [running, reload]);
+
   const run = useCallback(
     async <T,>(action: Promise<Result<T>>): Promise<Result<T>> => {
       const r = await action;
       setLastError(r.ok ? null : r.error);
-      if (r.ok) void reload();
+      // Awaited: a button stays disabled until the fresh state is on screen (no stale second click).
+      if (r.ok) await reload();
       return r;
     },
     [reload],
@@ -94,6 +103,13 @@ export function App() {
           onConnectCalendar={(icalUrl) => run(window.livingMap.commands.connectCalendar({ icalUrl }))}
           onRefreshCalendar={() => run(window.livingMap.commands.refreshCalendar())}
           onDisconnectCalendar={() => run(window.livingMap.commands.disconnectCalendar())}
+          execution={{
+            onStartWork: (actionId) => run(window.livingMap.commands.startWork({ actionId })),
+            onPauseWork: (actionId) => run(window.livingMap.commands.pauseWork({ actionId })),
+            onCompleteAction: (id, expectedVersion) =>
+              run(window.livingMap.commands.completeAction({ id, expectedVersion })),
+            onSetDailyWorkTarget: (minutes) => run(window.livingMap.commands.setDailyWorkTarget({ minutes })),
+          }}
         />
       ) : (
         <>
@@ -208,6 +224,11 @@ const HISTORY_LABELS: Record<string, string> = {
   "proposal.reject": "Отклонено предложение ИИ",
   "proposal.stale": "Предложение ИИ устарело",
   "plan.reorder": "ИИ изменил порядок действий",
+  "work.start": "Работа начата",
+  "work.resume": "Работа продолжена",
+  "work.pause": "Работа поставлена на паузу",
+  "work.recover": "Работа поставлена на паузу после сбоя",
+  "settings.dailyWorkTarget": "Изменена рабочая норма",
 };
 
 const PROPOSAL_KIND_LABELS: Record<string, string> = {
@@ -738,14 +759,16 @@ function ActionRow({
 function ChangeHistorySection({ entries }: { entries: ChangeLogEntryDto[] }) {
   return (
     <section data-testid="change-history" className="space-y-1 rounded border p-3">
-      <h2 className="font-semibold">История изменений</h2>
-      <ul className="space-y-0.5 text-neutral-600">
-        {entries.map((entry) => (
-          <li key={entry.id} data-testid="history-entry">
-            {translateHistoryEntry(entry)}
-          </li>
-        ))}
-      </ul>
+      <details data-testid="change-history-details">
+        <summary className="cursor-pointer font-semibold">История изменений</summary>
+        <ul className="mt-1 space-y-0.5 text-neutral-600">
+          {entries.map((entry) => (
+            <li key={entry.id} data-testid="history-entry">
+              {translateHistoryEntry(entry)}
+            </li>
+          ))}
+        </ul>
+      </details>
     </section>
   );
 }

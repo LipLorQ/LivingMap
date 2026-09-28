@@ -107,6 +107,7 @@ test("Stage 3: an external AI proposal appears live, is reviewed in Russian, rej
   const card = win.getByTestId("proposal");
   await expect(card).toBeVisible();
   await expect(card).toContainText("Предложение ИИ: Первый маршрут");
+  await expect(win.getByTestId("proposals-heading")).toHaveText("Предложения ИИ (1)");
   for (const label of [
     "Зачем это",
     "Подробнее о логике",
@@ -156,7 +157,11 @@ test("Stage 3: an external AI proposal appears live, is reviewed in Russian, rej
   await expect(card).toHaveCount(0);
   await expect(win.getByTestId("stage")).toHaveCount(2);
   await expect(win.getByTestId("plan-item")).toHaveText(["Поговорить с тремя людьми", "Описать доменную модель"]);
-  await expect(win.getByTestId("plan")).toContainText("Порядок составил ИИ");
+  await expect(win.getByTestId("plan-status")).toContainText("Порядок составил ИИ");
+  // Full plan rationale is collapsed by default, expandable on demand.
+  await expect(win.getByTestId("plan-rationale")).toBeHidden();
+  await win.getByTestId("plan").getByText("Подробнее о логике").click();
+  await expect(win.getByTestId("plan-rationale")).toContainText("Сначала проверить идею на людях, потом строить");
   await expect(win.getByTestId("history-entry").first()).toHaveText("Принято предложение ИИ: маршрут");
   expect(await win.locator("main").innerText()).not.toMatch(/[A-Za-z]/);
 

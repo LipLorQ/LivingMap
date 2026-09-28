@@ -108,6 +108,9 @@ test("Stage 2: one real Intention through the actual UI, surviving a restart", a
   await expect(win.getByTestId("action-status")).toHaveText("готово");
 
   // 8. Meaningful change history is visible.
+  // Collapsed by default, expandable on demand.
+  await expect(win.getByTestId("history-entry").first()).toBeHidden();
+  await win.getByTestId("change-history").getByText("История изменений").click();
   await expect(win.getByTestId("history-entry").first()).toBeVisible();
 
   // 9. Full state survives an app restart.

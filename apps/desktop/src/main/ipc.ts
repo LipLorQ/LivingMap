@@ -21,9 +21,11 @@ import {
   ResolveProposalInputSchema,
   type Result,
   SetCurrentStageInputSchema,
+  SetDailyWorkTargetInputSchema,
   UnblockActionInputSchema,
   UpdateIntentionInputSchema,
   UpdateSeasonFocusInputSchema,
+  WorkActionInputSchema,
 } from "@living-map/contracts";
 import { IPC_CHANNELS } from "@living-map/contracts/ipc";
 import { ipcMain, type WebFrameMain } from "electron";
@@ -107,4 +109,11 @@ export function registerIpcHandlers(app: Application, isTrusted: TrustCheck, cal
   handle(IPC_CHANNELS.connectCalendar, ConnectCalendarInputSchema, (input) => calendar.connect(input.icalUrl));
   handle(IPC_CHANNELS.refreshCalendar, null, () => calendar.refresh());
   handle(IPC_CHANNELS.disconnectCalendar, null, () => calendar.disconnect());
+
+  // Execution (Stage 5): direct user actions. Resume is startWork on an Action that already has time.
+  handle(IPC_CHANNELS.startWork, WorkActionInputSchema, (input) => app.commands.startWork(ui(), input));
+  handle(IPC_CHANNELS.pauseWork, WorkActionInputSchema, (input) => app.commands.pauseWork(ui(), input));
+  handle(IPC_CHANNELS.setDailyWorkTarget, SetDailyWorkTargetInputSchema, (input) =>
+    app.commands.setDailyWorkTarget(ui(), input),
+  );
 }

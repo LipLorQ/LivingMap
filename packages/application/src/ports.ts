@@ -10,6 +10,7 @@ import type {
   Season,
   Stage,
   Version,
+  WorkInterval,
 } from "@living-map/domain";
 
 export interface Clock {
@@ -108,6 +109,28 @@ export interface CalendarSnapshotRepository extends CalendarSnapshotReader {
   save(snapshot: CalendarSnapshotDto): void;
 }
 
+export interface WorkIntervalReader {
+  /** The one globally running interval, if any. */
+  findRunning(): WorkInterval | undefined;
+  listByAction(actionId: EntityId): WorkInterval[];
+  /** Intervals still running or that ended at/after `since` (enough for today/week totals). */
+  listEndedSince(since: Instant): WorkInterval[];
+}
+
+export interface WorkIntervalRepository extends WorkIntervalReader {
+  insert(interval: WorkInterval): void;
+  /** Closes the interval only if it is still running; false otherwise. */
+  closeIfRunning(id: EntityId, endedAt: Instant): boolean;
+}
+
+export interface SettingsReader {
+  dailyWorkTargetMinutes(): number;
+}
+
+export interface SettingsRepository extends SettingsReader {
+  setDailyWorkTargetMinutes(minutes: number): void;
+}
+
 export interface ProposalReader {
   findById(id: EntityId): Proposal | undefined;
   listPending(): Proposal[];
@@ -149,6 +172,8 @@ export interface ReadScope {
   proposals: ProposalReader;
   changeLog: ChangeLogReader;
   calendar: CalendarSnapshotReader;
+  work: WorkIntervalReader;
+  settings: SettingsReader;
   stateRevision(): number;
 }
 
@@ -161,6 +186,8 @@ export interface WriteScope {
   plans: OrderedActionPlanRepository;
   proposals: ProposalRepository;
   calendar: CalendarSnapshotRepository;
+  work: WorkIntervalRepository;
+  settings: SettingsRepository;
   /** The committed revision this transaction started from — still the pre-bump value after recordChange. */
   stateRevision(): number;
   /**
@@ -180,6 +207,11 @@ export interface WriteScope {
 export interface Store {
   read<T>(work: (scope: ReadScope) => T): T;
   write<T>(context: WriteContextMeta, work: (scope: WriteScope) => T): T;
+  /**
+   * Crash-recovery checkpoint of the running work interval. Deliberately outside write(): it is
+   * technical metadata, so it neither bumps state_revision nor touches the change log/history.
+   */
+  touchWorkHeartbeat(intervalId: EntityId, at: Instant): void;
 }
 
 export type WriteContextMeta = {

@@ -16,7 +16,7 @@ let home: string;
 let mcp: Client | undefined;
 
 test.beforeEach(() => {
-  home = mkdtempSync(join(tmpdir(), "living-map-e2e-now-"));
+  home = mkdtempSync(join(tmpdir(), "living-map-e2e-work-"));
 });
 test.afterEach(async () => {
   await mcp?.close();
@@ -31,7 +31,7 @@ function launch(): Promise<ElectronApplication> {
 }
 
 async function connectMcp(): Promise<Client> {
-  const client = new Client({ name: "e2e-now-host", version: "0" });
+  const client = new Client({ name: "e2e-work-host", version: "0" });
   await client.connect(
     new StdioClientTransport({
       command: process.execPath,
@@ -88,9 +88,6 @@ async function proposeAndAcceptOrder(win: Page, actions: SeededActions): Promise
     actionEdits: [],
     actionOrder: [actions.a1, actions.a2],
   });
-  // A pending Proposal is discoverable from the default "Сейчас" tab, no hunting.
-  await expect(win.getByTestId("now-screen")).toBeVisible();
-  await expect(win.getByTestId("proposals-heading")).toHaveText("Предложения ИИ (1)");
   const accepted = await win.evaluate(
     async (id) => await window.livingMap.commands.acceptProposal({ id }),
     proposal.id,
@@ -98,66 +95,73 @@ async function proposeAndAcceptOrder(win: Page, actions: SeededActions): Promise
   expect(accepted.ok).toBe(true);
 }
 
-test("Stage 4: Сейчас reflects real state — empty, needs-replan, selected action, expandable order, disconnected calendar, and updates after completion", async () => {
-  const app = await launch();
-  const win = await app.firstWindow();
-
-  // 1. Fresh app: "Сейчас" is the default screen, no Intention yet — a calm empty state, not NeedsAIReplan.
-  await expect(win.getByTestId("now-screen")).toBeVisible();
-  await expect(win.getByTestId("now-empty")).toBeVisible();
-  await expect(win.getByTestId("now-needs-replan")).toHaveCount(0);
-
-  // Calendar: never connected — truthful, not pretending to be fresh.
-  await expect(win.getByTestId("calendar-disconnected")).toBeVisible();
-  await expect(win.getByTestId("calendar-ical-url")).toBeVisible();
-
-  // 2. An Intention with actions but no AI-approved order yet: NeedsAIReplan, not a local guess.
+test("Stage 5: Начать → Пауза → Продолжить → quit pauses → Готово moves Сейчас; totals and target", async () => {
+  let app = await launch();
+  let win = await app.firstWindow();
   const actions = await seed(win);
-  await expect(win.getByTestId("now-needs-replan")).toBeVisible();
-  await expect(win.getByTestId("now-action")).toHaveCount(0);
-
-  // 3. A real external AI proposes the order; the user accepts it in the desktop UI.
   mcp = await connectMcp();
   await proposeAndAcceptOrder(win, actions);
 
-  // 4. The first admissible Action in the AI order becomes "Сейчас", with a truthful local reason.
-  await expect(win.getByTestId("now-action")).toBeVisible();
+  // Idle: the current Action offers Начать; totals and the 6 h target are visible but secondary.
   await expect(win.getByTestId("now-action")).toHaveAttribute("data-id", actions.a1);
-  await expect(win.getByTestId("now-done-when")).toContainText("готово 1");
-  await expect(win.getByTestId("now-why")).toContainText("Первое действие в подтверждённом порядке.");
-  await expect(win.getByTestId("now-needs-replan")).toHaveCount(0);
+  await expect(win.getByTestId("work")).toHaveAttribute("data-state", "idle");
+  await expect(win.getByTestId("work-timer")).toHaveText("00:00");
+  await expect(win.getByTestId("work-today")).toHaveText("Сегодня: 0 мин / 6 ч");
+  await expect(win.getByTestId("work-week")).toHaveText("За неделю: 0 мин");
+  await expect(win.getByTestId("work-start")).toHaveText("Начать");
 
-  // 5. The strategic order is not shown by default, but can be expanded on demand.
-  await expect(win.getByTestId("plan-order")).toHaveCount(0);
-  await win.getByTestId("now-toggle-order").click();
-  await expect(win.getByTestId("plan-order")).toBeVisible();
-  await expect(win.getByTestId("plan-item")).toHaveText(["Первое действие", "Второе действие"]);
+  // Running: live timer and Пауза.
+  await win.getByTestId("work-start").click();
+  await expect(win.getByTestId("work")).toHaveAttribute("data-state", "running");
+  await expect(win.getByTestId("work-pause")).toHaveText("Пауза");
+  await expect(win.getByTestId("work-timer")).not.toHaveText("00:00", { timeout: 3000 });
 
-  // 6. Completing the current Action (existing Stage 2 lifecycle) reveals the next admissible one —
-  // the selector follows the AI order, it does not rerank or invent a new one.
-  await win.evaluate(async (id) => {
-    const view = await window.livingMap.queries.getCurrentView();
-    if (!view.ok) throw new Error("view");
-    const action = view.value.stages.flatMap((s) => s.actions).find((a) => a.id === id);
-    if (!action) throw new Error("action missing");
-    await window.livingMap.commands.completeAction({ id, expectedVersion: action.version });
-  }, actions.a1);
+  // Paused: frozen, Продолжить.
+  await win.getByTestId("work-pause").click();
+  await expect(win.getByTestId("work")).toHaveAttribute("data-state", "paused");
+  await expect(win.getByTestId("work-start")).toHaveText("Продолжить");
+  const frozen = await win.getByTestId("work-timer").textContent();
+  await win.waitForTimeout(1500);
+  await expect(win.getByTestId("work-timer")).toHaveText(frozen ?? "");
+
+  // Target is an editable setting.
+  await win.getByTestId("work-target-edit").click();
+  await win.getByTestId("work-target-hours").fill("5");
+  await win.getByTestId("work-target-save").click();
+  await expect(win.getByTestId("work-today")).toContainText("/ 5 ч");
+
+  // Resume, then really quit the app while running: it comes back paused with the time kept.
+  await win.getByTestId("work-start").click();
+  await expect(win.getByTestId("work")).toHaveAttribute("data-state", "running");
+  await win.waitForTimeout(1200);
+  await app.close();
+  app = await launch();
+  win = await app.firstWindow();
+  await expect(win.getByTestId("work")).toHaveAttribute("data-state", "paused");
+  await expect(win.getByTestId("work-start")).toHaveText("Продолжить");
+  await expect(win.getByTestId("work-timer")).not.toHaveText("00:00");
+
+  // Готово while running is one click: next Action becomes Сейчас with its own fresh timer.
+  await win.getByTestId("work-start").click();
+  await expect(win.getByTestId("work")).toHaveAttribute("data-state", "running");
+  await win.getByTestId("work-complete").click();
   await expect(win.getByTestId("now-action")).toHaveAttribute("data-id", actions.a2);
-  await expect(win.getByTestId("now-why")).toContainText("Предыдущие действия по порядку уже выполнены.");
+  await expect(win.getByTestId("work")).toHaveAttribute("data-state", "idle");
+  await expect(win.getByTestId("work-timer")).toHaveText("00:00");
 
-  // 7. Completing the last remaining Action leaves nothing admissible: a real NeedsAIReplan, not a crash.
-  await win.evaluate(async (id) => {
-    const view = await window.livingMap.queries.getCurrentView();
-    if (!view.ok) throw new Error("view");
-    const action = view.value.stages.flatMap((s) => s.actions).find((a) => a.id === id);
-    if (!action) throw new Error("action missing");
-    await window.livingMap.commands.completeAction({ id, expectedVersion: action.version });
-  }, actions.a2);
+  // Completing the last Action → NeedsAIReplan, totals still shown.
+  await win.getByTestId("work-complete").click();
   await expect(win.getByTestId("now-needs-replan")).toBeVisible();
-  await expect(win.getByTestId("now-action")).toHaveCount(0);
+  await expect(win.getByTestId("work-today-idle")).toContainText("/ 5 ч");
 
-  // Calendar state never silently changed on its own throughout.
-  await expect(win.getByTestId("calendar-disconnected")).toBeVisible();
+  // Readable Russian history of the meaningful execution events.
+  await win.getByTestId("nav-editor").click();
+  const history = win.getByTestId("history-entry");
+  await expect(history.filter({ hasText: "Работа начата" })).toHaveCount(1);
+  await expect(history.filter({ hasText: "Работа продолжена" })).toHaveCount(2);
+  await expect(history.filter({ hasText: "Работа поставлена на паузу" })).toHaveCount(2);
+  // Both were real pauses (Пауза / quit), not crash recovery.
+  await expect(history.filter({ hasText: "после сбоя" })).toHaveCount(0);
 
   await app.close();
 });

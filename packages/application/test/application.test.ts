@@ -32,6 +32,9 @@ function memoryStore(): Store & { revision: number; changes: string[]; rollbacks
     lastError: null,
   };
   const calendarReader = { get: () => calendarRow };
+  // Execution (Stage 5) is exercised against real SQLite (persistence-sqlite/test/execution.test.ts).
+  const workReader = { findRunning: () => undefined, listByAction: () => [], listEndedSince: () => [] };
+  const settingsReader = { dailyWorkTargetMinutes: () => 360 };
   const plansReader = { findByIntention: (iid: string) => [...planRows.values()].find((p) => p.intentionId === iid) };
   const proposalsReader = {
     findById: (id: string) => proposalRows.get(id),
@@ -76,8 +79,11 @@ function memoryStore(): Store & { revision: number; changes: string[]; rollbacks
         proposals: proposalsReader,
         changeLog: { listRecent: (limit) => changeLogRows.slice().reverse().slice(0, limit) },
         calendar: calendarReader,
+        work: workReader,
+        settings: settingsReader,
         stateRevision: () => state.revision,
       }) as T,
+    touchWorkHeartbeat: () => {},
     write: <T>(ctx: Parameters<Store["write"]>[0], work: Parameters<Store["write"]>[1]) => {
       const snapshot = {
         season: seasonRow,
@@ -224,6 +230,8 @@ function memoryStore(): Store & { revision: number; changes: string[]; rollbacks
               calendarRow = snapshot;
             },
           },
+          work: { ...workReader, insert: () => {}, closeIfRunning: () => false },
+          settings: { ...settingsReader, setDailyWorkTargetMinutes: () => {} },
           stateRevision: () => startRevision,
           recordChange: (c) => {
             state.changes.push(c.commandType);
@@ -475,6 +483,7 @@ describe("Intention → Stage → Action", () => {
       write: () => {
         throw new Error("boom");
       },
+      touchWorkHeartbeat: () => {},
     };
     const app = createApplication({ store: failing, clock: fakeClock, ids: sequentialIds() });
     expect(app.queries.getCurrentView()).toEqual({

@@ -14,6 +14,7 @@ import {
   type EditActionInput,
   type EditGoodLifeConditionInput,
   type EditStageInput,
+  type ExecutionDto,
   err,
   type GetProposalInput,
   type GoodLifeConditionDto,
@@ -35,17 +36,21 @@ import {
   type RoutePayload,
   type SeasonDto,
   type SetCurrentStageInput,
+  type SetDailyWorkTargetInput,
   type StageDto,
   type StateRevisionDto,
   type UnblockActionInput,
   type UpdateIntentionInput,
   type UpdateSeasonFocusInput,
+  type WorkActionInput,
 } from "@living-map/contracts";
 import {
   type Action,
+  addDays,
   applyRouteChange,
   type Blocker,
   blockAction,
+  closeAt,
   completeAction,
   computeReorder,
   createAction,
@@ -55,13 +60,17 @@ import {
   createProposal,
   createSeason,
   createStage,
+  type EntityId,
   editAction,
   editGoodLifeCondition,
   editIntention,
   editStageTitle,
   type GoodLifeCondition,
+  type Instant,
   type Intention,
   isAtVersion,
+  isSilent,
+  localDate,
   MAX_PENDING_PROPOSALS,
   type Proposal,
   type RouteChange,
@@ -70,10 +79,15 @@ import {
   resolveProposal,
   type Season,
   type Stage,
+  totalWorkedMs,
   unblockAction,
   unplannedActionIds,
   updateSeasonFocus,
   validateActionOrder,
+  WORK_HEARTBEAT_GAP_MS,
+  type WorkInterval,
+  weekStart,
+  workedMsBetweenDates,
 } from "@living-map/domain";
 import { type Actor, type CommandContext, type CommandSource, createCommandContext } from "./context";
 import {
@@ -103,7 +117,11 @@ export type ApplicationDeps = {
   ids: IdGenerator;
   /** Technical diagnostics only; never receives user content beyond the thrown error. */
   reportError?: (operation: string, error: unknown) => void;
+  /** IANA zone new work intervals are attributed to; defaults to the system zone. */
+  timeZone?: () => string;
 };
+
+export { WORK_HEARTBEAT_GAP_MS };
 
 const toSeasonDto = (season: Season): SeasonDto => ({ ...season });
 const toGoodLifeConditionDto = (c: GoodLifeCondition): GoodLifeConditionDto => ({ ...c });
@@ -120,6 +138,7 @@ class RollbackSignal {
 
 export function createApplication(deps: ApplicationDeps) {
   const { store, clock, ids } = deps;
+  const timeZone = deps.timeZone ?? (() => Intl.DateTimeFormat().resolvedOptions().timeZone);
 
   function guarded<T>(operation: string, run: () => Result<T>): Result<T> {
     try {
@@ -170,7 +189,14 @@ export function createApplication(deps: ApplicationDeps) {
     const plan = intention ? s.plans.findByIntention(intention.id) : undefined;
     const now = clock.now();
     const calendarSnapshot = s.calendar.get();
-    const { currentAction, needsAiReplan } = computeCurrentAction(intention, actions, plan, calendarSnapshot, now);
+    const { currentAction, needsAiReplan } = computeCurrentAction(
+      intention,
+      actions,
+      plan,
+      calendarSnapshot,
+      now,
+      workingActionId(s, now),
+    );
     return {
       season: season ? toSeasonDto(season) : null,
       goodLifeConditions: s.goodLifeConditions.list().map(toGoodLifeConditionDto),
@@ -185,7 +211,76 @@ export function createApplication(deps: ApplicationDeps) {
       currentAction,
       needsAiReplan,
       calendarSnapshot,
+      execution: execution(s, currentAction?.actionId ?? null, now),
     };
+  }
+
+  /** The Action really being worked on — it pins `Сейчас`; a silent interval (unnoticed sleep) does not. */
+  function workingActionId(s: Pick<ReadScope, "work">, now: Instant): EntityId | null {
+    const running = s.work.findRunning();
+    return running && !isSilent(running, now) ? running.actionId : null;
+  }
+
+  /** The `Сейчас` Action as the view would show it — the only Action work may start on. */
+  function currentActionId(s: ReadScope | WriteScope, now: Instant): EntityId | null {
+    const intention = s.intentions.list()[0];
+    if (!intention) return null;
+    const stages = s.stages.listByIntention(intention.id);
+    const actions = s.actions.listByStages(stages.map((stage) => stage.id));
+    const plan = s.plans.findByIntention(intention.id);
+    return (
+      computeCurrentAction(intention, actions, plan, s.calendar.get(), now, workingActionId(s, now)).currentAction
+        ?.actionId ?? null
+    );
+  }
+
+  function execution(s: Pick<ReadScope, "work" | "settings">, actionId: EntityId | null, now: Instant): ExecutionDto {
+    const running = s.work.findRunning();
+    const onAction = actionId ? s.work.listByAction(actionId) : [];
+    const today = localDate(now, timeZone());
+    const monday = weekStart(today);
+    // Any zone is within ±14h of UTC, so a day of slack before Monday catches every candidate interval.
+    const recent = s.work.listEndedSince(`${addDays(monday, -1)}T00:00:00.000Z`);
+    return {
+      // A silent interval (unnoticed sleep, killed app) is not shown as running: its time stopped growing.
+      state:
+        running && running.actionId === actionId && !isSilent(running, now)
+          ? "running"
+          : onAction.length > 0
+            ? "paused"
+            : "idle",
+      actionId,
+      actionWorkedMs: Math.round(totalWorkedMs(onAction, now)),
+      todayWorkedMs: Math.round(workedMsBetweenDates(recent, today, addDays(today, 1), now)),
+      weekWorkedMs: Math.round(workedMsBetweenDates(recent, monday, addDays(monday, 7), now)),
+      dailyWorkTargetMinutes: s.settings.dailyWorkTargetMinutes(),
+      computedAt: now,
+    };
+  }
+
+  /** Stops `interval` at `at` (never before it started) and logs it; false if it already stopped. */
+  function stopInterval(
+    s: WriteScope,
+    interval: WorkInterval,
+    at: Instant,
+    commandType: "work.pause" | "work.recover",
+  ): Result<null> {
+    if (!s.work.closeIfRunning(interval.id, closeAt(interval, at))) {
+      return err("CONFLICT_RELOAD", "Work was already paused; reload");
+    }
+    s.recordChange({
+      commandType,
+      entityType: "action",
+      entityId: interval.actionId,
+      summary: commandType === "work.pause" ? "paused" : "paused after interruption",
+    });
+    return ok(null);
+  }
+
+  /** Complete/Block while running: the interval ends in the same transaction as the status change. */
+  function stopIfRunningOn(s: WriteScope, actionId: EntityId, at: Instant): void {
+    const running = s.work.findRunning();
+    if (running?.actionId === actionId) s.work.closeIfRunning(running.id, closeAt(running, at));
   }
 
   function checkRevision(s: WriteScope, expected: number): Result<never> | undefined {
@@ -711,6 +806,8 @@ export function createApplication(deps: ApplicationDeps) {
             }
             const completed = completeAction(current, clock.now());
             if (!completed.ok) return err("VALIDATION_ERROR", completed.reason);
+            // Готово while running (Stage 5 §11): one command, one revision — the time is saved too.
+            stopIfRunningOn(s, current.id, completed.value.updatedAt);
             if (!s.actions.updateIfVersion(completed.value, input.expectedVersion)) {
               return err("CONFLICT_RELOAD", "Action changed concurrently; reload and retry");
             }
@@ -735,6 +832,8 @@ export function createApplication(deps: ApplicationDeps) {
             }
             const blocked = blockAction(current, input.reason, clock.now());
             if (!blocked.ok) return err("VALIDATION_ERROR", blocked.reason);
+            // A blocked Action cannot be worked on: never keep recording time against it.
+            stopIfRunningOn(s, current.id, blocked.value.updatedAt);
             if (!s.actions.updateIfVersion(blocked.value, input.expectedVersion)) {
               return err("CONFLICT_RELOAD", "Action changed concurrently; reload and retry");
             }
@@ -1044,6 +1143,120 @@ export function createApplication(deps: ApplicationDeps) {
               summary: !input.connected ? "disconnected" : input.lastError ? `error: ${input.lastError}` : "synced",
             });
             return ok(input);
+          }),
+        ),
+
+      /** Начать / Продолжить. Only the current `Сейчас` Action, only when nothing else runs. */
+      startWork: (ctx: CommandContext, input: WorkActionInput): Result<ExecutionDto> =>
+        authorize("work.start", ctx) ??
+        guarded("startWork", () =>
+          transact(ctx, (s): Result<ExecutionDto> => {
+            const now = clock.now();
+            const running = s.work.findRunning();
+            if (running && isSilent(running, now)) {
+              // Resuming after an unnoticed sleep: first stop the silent interval at its checkpoint.
+              const stopped = stopInterval(s, running, running.lastHeartbeatAt, "work.recover");
+              if (!stopped.ok) return stopped;
+            } else if (running) return err("CONFLICT_RELOAD", "Work is already running; reload");
+            if (currentActionId(s, now) !== input.actionId) {
+              return err("CONFLICT_RELOAD", "This Action is no longer the current one; reload");
+            }
+            const resumed = s.work.listByAction(input.actionId).length > 0;
+            s.work.insert({
+              id: ids.next(),
+              actionId: input.actionId,
+              startedAt: now,
+              endedAt: null,
+              lastHeartbeatAt: now,
+              timeZone: timeZone(),
+            });
+            s.recordChange({
+              commandType: resumed ? "work.resume" : "work.start",
+              entityType: "action",
+              entityId: input.actionId,
+              summary: resumed ? "resumed" : "started",
+            });
+            return ok(execution(s, input.actionId, now));
+          }),
+        ),
+
+      /** Пауза. Repeating it (double click, stale UI) is a CONFLICT_RELOAD, never a second interval. */
+      pauseWork: (ctx: CommandContext, input: WorkActionInput): Result<ExecutionDto> =>
+        authorize("work.pause", ctx) ??
+        guarded("pauseWork", () =>
+          transact(ctx, (s): Result<ExecutionDto> => {
+            const now = clock.now();
+            const running = s.work.findRunning();
+            if (running?.actionId !== input.actionId) return err("CONFLICT_RELOAD", "Work is not running; reload");
+            const stopped = stopInterval(s, running, now, "work.pause");
+            return stopped.ok ? ok(execution(s, input.actionId, now)) : stopped;
+          }),
+        ),
+
+      /** App quit / OS suspend: pauses whatever is running; a no-op (no write) when nothing is. */
+      pauseRunningWork: (ctx: CommandContext): Result<null> =>
+        authorize("work.pause", ctx) ??
+        guarded("pauseRunningWork", () =>
+          transact(ctx, (s): Result<null> => {
+            const running = s.work.findRunning();
+            return running ? stopInterval(s, running, clock.now(), "work.pause") : ok(null);
+          }),
+        ),
+
+      /**
+       * Desktop startup: an interval still open now was left by a crash / power loss. It is capped at
+       * its last trustworthy checkpoint and becomes paused — offline time never counts as work.
+       */
+      recoverInterruptedWork: (ctx: CommandContext): Result<null> =>
+        authorize("work.recover", ctx) ??
+        guarded("recoverInterruptedWork", () =>
+          transact(ctx, (s): Result<null> => {
+            const running = s.work.findRunning();
+            return running ? stopInterval(s, running, running.lastHeartbeatAt, "work.recover") : ok(null);
+          }),
+        ),
+
+      /**
+       * ~Once a minute while the app runs. Normally only moves the technical checkpoint (no revision,
+       * no history). A checkpoint older than WORK_HEARTBEAT_GAP_MS means the process was not really
+       * running (missed suspend event, frozen VM, clock jump): cap there and pause, like a crash.
+       */
+      heartbeatWork: (ctx: CommandContext): Result<"idle" | "checkpoint" | "recovered"> =>
+        authorize("work.recover", ctx) ??
+        guarded("heartbeatWork", (): Result<"idle" | "checkpoint" | "recovered"> => {
+          const running = store.read((s) => s.work.findRunning());
+          if (!running) return ok("idle");
+          const now = clock.now();
+          const gap = new Date(now).getTime() - new Date(running.lastHeartbeatAt).getTime();
+          if (gap <= WORK_HEARTBEAT_GAP_MS && gap >= 0) {
+            store.touchWorkHeartbeat(running.id, now);
+            return ok("checkpoint");
+          }
+          if (gap < 0) {
+            // The clock went backwards: keep the later checkpoint, do not invent time.
+            return ok("checkpoint");
+          }
+          const recovered = transact(ctx, (s) => stopInterval(s, running, running.lastHeartbeatAt, "work.recover"));
+          return recovered.ok ? ok("recovered") : recovered;
+        }),
+
+      /** «Норма»: a user setting. Changes only the comparison text, never recorded time. */
+      setDailyWorkTarget: (ctx: CommandContext, input: SetDailyWorkTargetInput): Result<ExecutionDto> =>
+        authorize("settings.dailyWorkTarget", ctx) ??
+        guarded("setDailyWorkTarget", () =>
+          transact(ctx, (s): Result<ExecutionDto> => {
+            const now = clock.now();
+            if (s.settings.dailyWorkTargetMinutes() === input.minutes) {
+              return err("VALIDATION_ERROR", "Daily work target is unchanged");
+            }
+            s.settings.setDailyWorkTargetMinutes(input.minutes);
+            s.recordChange({
+              commandType: "settings.dailyWorkTarget",
+              entityType: "settings",
+              entityId: "dailyWorkTarget",
+              summary: `${input.minutes}`,
+            });
+            return ok(execution(s, currentActionId(s, now), now));
           }),
         ),
     },

@@ -281,7 +281,12 @@ describe("route proposal lifecycle (desktop + MCP connections)", () => {
     });
     expect(view.pendingProposals).toEqual([]);
     expect(view.unplannedActionIds).toEqual([]);
-    expect(unwrap(desktop.queries.getCurrentView())).toEqual(unwrap(mcp.queries.getCurrentView()));
+    // `execution.computedAt` is the read time (it differs by a millisecond between the two reads).
+    const withoutReadTime = (v: ReturnType<typeof desktop.queries.getCurrentView>) => {
+      const value = unwrap(v);
+      return { ...value, execution: { ...value.execution, computedAt: "" } };
+    };
+    expect(withoutReadTime(desktop.queries.getCurrentView())).toEqual(withoutReadTime(mcp.queries.getCurrentView()));
 
     const log = handle.sqlite
       .prepare("select actor, command_type, entity_type from change_log where state_revision = ? order by rowid")

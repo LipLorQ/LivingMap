@@ -49,6 +49,8 @@ export const PLANNING_MEANINGS: Record<string, string> = {
   history: "recentHistory: meaningful changes, newest first. actor user-ui = the user, mcp-ai = an AI via MCP.",
   currentAction:
     "«Сейчас» — the one Action CurrentActionSelector picked as admissible right now (ARCHITECTURE §26). null with needsAiReplan=false means there is no active Intention yet; null with needsAiReplan=true means the order exists but nothing in it can be safely selected — propose a replan, do not invent a local order.",
+  execution:
+    "«Исполнение» — factual work time the user tracked with Начать/Пауза/Продолжить/Готово: state of the current Action (idle/running/paused), all time worked on it, today's and this week's totals (local days, Monday-start weeks) and the user's daily work target. Facts, not a score. You can read it; you cannot start, pause or change it.",
   calendarSnapshot:
     "«Календарь» — read-only calendar snapshot (private iCal feed) LivingMap itself refreshed and stored. connected=false or a stale syncedAt means treat it as unavailable, not as ground truth.",
 };
@@ -118,8 +120,18 @@ export function computeCurrentAction(
   plan: OrderedActionPlan | undefined,
   calendarSnapshot: CalendarSnapshotDto,
   now: Instant,
+  runningActionId: EntityId | null = null,
 ): { currentAction: CurrentActionDto | null; needsAiReplan: boolean } {
   if (!intention) return { currentAction: null, needsAiReplan: false };
+  // Running work pins `Сейчас` (Stage 5 §7): a reorder never yanks the card away mid-work. Only an
+  // open Action can be running — completing/blocking it closes the interval in the same command.
+  const running = runningActionId ? actions.find((a) => a.id === runningActionId && a.status === "open") : undefined;
+  if (running) {
+    return {
+      currentAction: { actionId: running.id, reason: { kind: "working" }, planRationale: plan?.rationale ?? null },
+      needsAiReplan: false,
+    };
+  }
   const selection = selectCurrentAction({
     orderedActionIds: plan ? plan.orderedActionIds : null,
     actions: actions.map((a) => ({ id: a.id, status: a.status })),

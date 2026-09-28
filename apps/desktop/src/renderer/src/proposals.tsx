@@ -202,6 +202,9 @@ export function ProposalsSection({
   if (proposals.length === 0) return null;
   return (
     <div data-testid="proposals" className="space-y-3">
+      <h2 data-testid="proposals-heading" className="font-semibold">
+        Предложения ИИ ({proposals.length})
+      </h2>
       {proposals.map((p) => (
         <ProposalCard key={p.id} proposal={p} onAccept={() => onAccept(p.id)} onReject={() => onReject(p.id)} />
       ))}
@@ -243,13 +246,15 @@ export function PlanSection({
               );
             })}
           </ol>
-          <p className="whitespace-pre-wrap text-neutral-700">
-            <span className="font-medium">Почему такой порядок: </span>
-            {plan.rationale}
-          </p>
-          <p className="text-xs text-neutral-500">
+          <p data-testid="plan-status" className="text-xs text-neutral-500">
             Порядок составил {plan.createdBy === "mcp-ai" ? "ИИ" : "ты"} · обновлён {formatDate(plan.updatedAt)}
           </p>
+          <details data-testid="plan-rationale-details">
+            <summary className="cursor-pointer font-medium text-neutral-600">Подробнее о логике</summary>
+            <p data-testid="plan-rationale" className="whitespace-pre-wrap text-neutral-700">
+              {plan.rationale}
+            </p>
+          </details>
         </>
       )}
       {unplannedActionIds.length > 0 && (

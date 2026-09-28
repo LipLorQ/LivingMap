@@ -15,6 +15,7 @@ import type {
   EditActionInput,
   EditGoodLifeConditionInput,
   EditStageInput,
+  ExecutionDto,
   GoodLifeConditionDto,
   IntentionDto,
   ListChangeHistoryInput,
@@ -28,11 +29,13 @@ import type {
   Result,
   SeasonDto,
   SetCurrentStageInput,
+  SetDailyWorkTargetInput,
   StageDto,
   StateRevisionDto,
   UnblockActionInput,
   UpdateIntentionInput,
   UpdateSeasonFocusInput,
+  WorkActionInput,
 } from "./index";
 
 /** The complete, finite set of IPC channels (ARCHITECTURE §30). No dynamic channels. */
@@ -64,6 +67,9 @@ export const IPC_CHANNELS = {
   connectCalendar: "lm:command:connectCalendar",
   refreshCalendar: "lm:command:refreshCalendar",
   disconnectCalendar: "lm:command:disconnectCalendar",
+  startWork: "lm:command:startWork",
+  pauseWork: "lm:command:pauseWork",
+  setDailyWorkTarget: "lm:command:setDailyWorkTarget",
   stateChanged: "lm:event:stateChanged",
 } as const;
 
@@ -99,6 +105,10 @@ export type LivingMapApi = {
     connectCalendar(input: ConnectCalendarInput): Promise<Result<CalendarSnapshotDto>>;
     refreshCalendar(): Promise<Result<CalendarSnapshotDto>>;
     disconnectCalendar(): Promise<Result<CalendarSnapshotDto>>;
+    /** Начать / Продолжить: only for the current Action, only when nothing else is running. */
+    startWork(input: WorkActionInput): Promise<Result<ExecutionDto>>;
+    pauseWork(input: WorkActionInput): Promise<Result<ExecutionDto>>;
+    setDailyWorkTarget(input: SetDailyWorkTargetInput): Promise<Result<ExecutionDto>>;
   };
   events: {
     /** Returns an unsubscribe function. */

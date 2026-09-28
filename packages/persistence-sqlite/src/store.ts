@@ -15,9 +15,13 @@ import type {
   ProposalRepository,
   SeasonReader,
   SeasonRepository,
+  SettingsReader,
+  SettingsRepository,
   StageReader,
   StageRepository,
   Store,
+  WorkIntervalReader,
+  WorkIntervalRepository,
 } from "@living-map/application";
 import { SchemaConflictError } from "@living-map/application";
 import type { CalendarSnapshotDto } from "@living-map/contracts";
@@ -33,7 +37,7 @@ import type {
   Season,
   Stage,
 } from "@living-map/domain";
-import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import type { Db, SqliteHandle } from "./connection";
 import { EXPECTED_SCHEMA_VERSION } from "./migrate";
 import {
@@ -46,7 +50,9 @@ import {
   orderedActionPlans,
   proposals,
   season,
+  settings,
   stages,
+  workIntervals,
 } from "./schema";
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
@@ -369,6 +375,57 @@ function calendarSnapshotRepository(q: Tx): CalendarSnapshotRepository {
   };
 }
 
+function workReader(q: Tx): WorkIntervalReader {
+  return {
+    findRunning: () => q.select().from(workIntervals).where(isNull(workIntervals.endedAt)).get(),
+    listByAction: (actionId) =>
+      q
+        .select()
+        .from(workIntervals)
+        .where(eq(workIntervals.actionId, actionId))
+        .orderBy(asc(workIntervals.startedAt))
+        .all(),
+    listEndedSince: (since) =>
+      q
+        .select()
+        .from(workIntervals)
+        .where(or(isNull(workIntervals.endedAt), gte(workIntervals.endedAt, since)))
+        .orderBy(asc(workIntervals.startedAt))
+        .all(),
+  };
+}
+
+function workRepository(q: Tx): WorkIntervalRepository {
+  return {
+    ...workReader(q),
+    insert: (interval) => void q.insert(workIntervals).values(interval).run(),
+    closeIfRunning: (id, endedAt) =>
+      q
+        .update(workIntervals)
+        .set({ endedAt })
+        .where(and(eq(workIntervals.id, id), isNull(workIntervals.endedAt)))
+        .run().changes === 1,
+  };
+}
+
+function settingsReader(q: Tx): SettingsReader {
+  return {
+    dailyWorkTargetMinutes: () => {
+      const row = q.select().from(settings).where(eq(settings.id, 1)).get();
+      if (!row) throw new Error("settings row missing");
+      return row.dailyWorkTargetMinutes;
+    },
+  };
+}
+
+function settingsRepository(q: Tx): SettingsRepository {
+  return {
+    ...settingsReader(q),
+    setDailyWorkTargetMinutes: (minutes) =>
+      void q.update(settings).set({ dailyWorkTargetMinutes: minutes }).where(eq(settings.id, 1)).run(),
+  };
+}
+
 function changeLogReader(q: Tx): ChangeLogReader {
   return {
     // One command may log several entries under one revision; rowid keeps their insertion order.
@@ -415,6 +472,8 @@ export function createSqliteStore(handle: SqliteHandle, ids: IdGenerator): Store
             proposals: proposalReader(tx),
             changeLog: changeLogReader(tx),
             calendar: calendarSnapshotReader(tx),
+            work: workReader(tx),
+            settings: settingsReader(tx),
             stateRevision: () => readRevision(tx),
           }),
         { behavior: "deferred" },
@@ -444,6 +503,8 @@ export function createSqliteStore(handle: SqliteHandle, ids: IdGenerator): Store
             plans: planRepository(tx),
             proposals: proposalRepository(tx),
             calendar: calendarSnapshotRepository(tx),
+            work: workRepository(tx),
+            settings: settingsRepository(tx),
             stateRevision: () => startRevision,
             recordChange: (change) => {
               if (revision === undefined) {
@@ -481,5 +542,13 @@ export function createSqliteStore(handle: SqliteHandle, ids: IdGenerator): Store
         },
         { behavior: "immediate" },
       ),
+
+    // A single-row UPDATE is atomic on its own; schema drift is harmless here (worst case it no-ops).
+    touchWorkHeartbeat: (intervalId, at) =>
+      void db
+        .update(workIntervals)
+        .set({ lastHeartbeatAt: at })
+        .where(and(eq(workIntervals.id, intervalId), isNull(workIntervals.endedAt)))
+        .run(),
   };
 }

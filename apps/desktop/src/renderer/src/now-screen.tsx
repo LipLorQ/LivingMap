@@ -3,6 +3,7 @@ import type {
   CalendarEventDto,
   CalendarSnapshotDto,
   CurrentViewDto,
+  ExecutionDto,
   WhyNowReasonDto,
 } from "@living-map/contracts";
 import { useEffect, useState } from "react";
@@ -12,6 +13,7 @@ const WHY_NOW_LOCAL: Record<WhyNowReasonDto["kind"], string> = {
   "first-in-plan": "Первое действие в подтверждённом порядке.",
   "previous-done": "Предыдущие действия по порядку уже выполнены.",
   "previous-blocked": "Предыдущие действия по порядку заблокированы.",
+  working: "Над этим действием сейчас идёт работа.",
 };
 
 /** The cached snapshot can be stale (a failed refresh keeps the last good one): never show an
@@ -73,14 +75,175 @@ function useClockTick(intervalMs: number): void {
   }, [intervalMs]);
 }
 
+export type ExecutionHandlers = {
+  onStartWork: (actionId: string) => Promise<unknown>;
+  onPauseWork: (actionId: string) => Promise<unknown>;
+  onCompleteAction: (actionId: string, expectedVersion: number) => Promise<unknown>;
+  onSetDailyWorkTarget: (minutes: number) => Promise<unknown>;
+};
+
+/** `15:00`, `1:15:00`. */
+export function formatTimer(ms: number): string {
+  const total = Math.floor(ms / 1000);
+  const h = Math.floor(total / 3600);
+  const mm = String(Math.floor((total % 3600) / 60)).padStart(2, "0");
+  const ss = String(total % 60).padStart(2, "0");
+  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+/** `3 ч 15 мин`, `45 мин`, `6 ч`. */
+export function formatDuration(ms: number): string {
+  const minutes = Math.floor(ms / 60_000);
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (h === 0) return `${m} мин`;
+  return m === 0 ? `${h} ч` : `${h} ч ${m} мин`;
+}
+
+/** The server's figures advanced locally while running — no write per second (Stage 5 §12). */
+function useLiveMs(execution: ExecutionDto): (ms: number) => number {
+  useClockTick(execution.state === "running" ? 1000 : 60_000);
+  const extra = execution.state === "running" ? Math.max(0, Date.now() - new Date(execution.computedAt).getTime()) : 0;
+  return (ms) => ms + extra;
+}
+
+function DailyTarget({ minutes, onSave }: { minutes: number; onSave: (minutes: number) => Promise<unknown> }) {
+  const [editing, setEditing] = useState(false);
+  const [hours, setHours] = useState(String(minutes / 60));
+  const parsed = Math.round(Number(hours.replace(",", ".")) * 60);
+  const valid = Number.isFinite(parsed) && parsed >= 1 && parsed <= 24 * 60;
+  if (!editing) {
+    return (
+      <span data-testid="work-target">
+        Норма: {formatDuration(minutes * 60_000)} ·{" "}
+        <button
+          type="button"
+          data-testid="work-target-edit"
+          className="underline"
+          onClick={() => {
+            setHours(String(minutes / 60));
+            setEditing(true);
+          }}
+        >
+          Изменить
+        </button>
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1">
+      Норма:
+      <input
+        data-testid="work-target-hours"
+        className="w-14 rounded border px-1"
+        inputMode="decimal"
+        value={hours}
+        onChange={(e) => setHours(e.target.value)}
+      />
+      ч
+      <button
+        type="button"
+        data-testid="work-target-save"
+        disabled={!valid}
+        onClick={async () => {
+          if (parsed !== minutes) await onSave(parsed);
+          setEditing(false);
+        }}
+      >
+        Сохранить
+      </button>
+      <button type="button" onClick={() => setEditing(false)}>
+        Отмена
+      </button>
+    </span>
+  );
+}
+
+function ExecutionPanel({
+  action,
+  execution,
+  handlers,
+}: {
+  action: ActionDto;
+  execution: ExecutionDto;
+  handlers: ExecutionHandlers;
+}) {
+  const [busy, setBusy] = useState(false);
+  const live = useLiveMs(execution);
+  // One click = one command: buttons stay disabled until the result (and the reload) arrives.
+  const once = (run: () => Promise<unknown>) => async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await run();
+    } finally {
+      setBusy(false);
+    }
+  };
+  const running = execution.state === "running";
+  return (
+    <div data-testid="work" data-state={execution.state} className="space-y-2 border-t border-blue-200 pt-2">
+      <div className="flex items-center gap-3">
+        <span data-testid="work-timer" className="font-mono text-2xl tabular-nums">
+          {formatTimer(live(execution.actionWorkedMs))}
+        </span>
+        {running ? (
+          <button
+            type="button"
+            data-testid="work-pause"
+            className="rounded border px-3 py-1"
+            disabled={busy}
+            onClick={once(() => handlers.onPauseWork(action.id))}
+          >
+            Пауза
+          </button>
+        ) : (
+          <button
+            type="button"
+            data-testid="work-start"
+            className="rounded border border-blue-500 bg-blue-600 px-3 py-1 text-white disabled:opacity-50"
+            disabled={busy}
+            onClick={once(() => handlers.onStartWork(action.id))}
+          >
+            {execution.state === "paused" ? "Продолжить" : "Начать"}
+          </button>
+        )}
+        <button
+          type="button"
+          data-testid="work-complete"
+          className="rounded border px-3 py-1"
+          disabled={busy}
+          onClick={once(() => handlers.onCompleteAction(action.id, action.version))}
+        >
+          Готово
+        </button>
+      </div>
+      <p className="text-xs text-neutral-600">
+        <span data-testid="work-today">
+          Сегодня: {formatDuration(live(execution.todayWorkedMs))} /{" "}
+          {formatDuration(execution.dailyWorkTargetMinutes * 60_000)}
+        </span>
+        {" · "}
+        <span data-testid="work-week">За неделю: {formatDuration(live(execution.weekWorkedMs))}</span>
+        {" · "}
+        <DailyTarget minutes={execution.dailyWorkTargetMinutes} onSave={handlers.onSetDailyWorkTarget} />
+      </p>
+    </div>
+  );
+}
+
 function CurrentActionCard({
   action,
   reason,
   planRationale,
+  execution,
+  handlers,
 }: {
   action: ActionDto | undefined;
   reason: WhyNowReasonDto;
   planRationale: string | null;
+  execution: ExecutionDto;
+  handlers: ExecutionHandlers;
 }) {
   if (!action) {
     // The plan referenced an id no longer in the current view — defensive, should not happen in practice.
@@ -106,6 +269,7 @@ function CurrentActionCard({
           </p>
         </details>
       )}
+      <ExecutionPanel action={action} execution={execution} handlers={handlers} />
     </div>
   );
 }
@@ -236,8 +400,10 @@ export function NowScreen({
   onConnectCalendar,
   onRefreshCalendar,
   onDisconnectCalendar,
+  execution,
 }: {
   view: CurrentViewDto;
+  execution: ExecutionHandlers;
   onConnectCalendar: (icalUrl: string) => Promise<unknown>;
   onRefreshCalendar: () => Promise<unknown>;
   onDisconnectCalendar: () => Promise<unknown>;
@@ -256,12 +422,21 @@ export function NowScreen({
         {!view.intention ? (
           <p data-testid="now-empty">Пока нет активного Замысла. Начни с вкладки «Замысел».</p>
         ) : view.needsAiReplan || !view.currentAction ? (
-          <NeedsAiReplan />
+          <>
+            <NeedsAiReplan />
+            <p data-testid="work-today-idle" className="mt-2 text-xs text-neutral-600">
+              Сегодня: {formatDuration(view.execution.todayWorkedMs)} /{" "}
+              {formatDuration(view.execution.dailyWorkTargetMinutes * 60_000)} · За неделю:{" "}
+              {formatDuration(view.execution.weekWorkedMs)}
+            </p>
+          </>
         ) : (
           <CurrentActionCard
             action={actionsById.get(view.currentAction.actionId)}
             reason={view.currentAction.reason}
             planRationale={view.currentAction.planRationale}
+            execution={view.execution}
+            handlers={execution}
           />
         )}
       </section>

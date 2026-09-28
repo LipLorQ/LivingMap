@@ -57,6 +57,20 @@
       "when": 1790568662196,
       "tag": "0007_seed_calendar_snapshot",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1790603817873,
+      "tag": "0008_add_work_intervals",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1790603826641,
+      "tag": "0009_seed_settings",
+      "breakpoints": true
     }
   ]
 }
