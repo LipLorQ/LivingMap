@@ -5,8 +5,8 @@ import type { Actor } from "./context";
  * Absence of a rule is NOT permission: unknown command or actor → denied.
  * Reads (queries) are open to every actor in the spike.
  *
- * `mcp-ai` may only (a) create proposals and (b) run the one SAFE WRITE: reordering the already
- * approved Actions of an already approved route. Every direct domain write — and accepting or
+ * `mcp-ai` may only (a) create proposals and (b) run the SAFE WRITEs: reordering the already
+ * approved Actions of an already approved route, and saving a Memory. Every direct domain write — and accepting or
  * rejecting a proposal — is `user-ui`/`system` only, so a strategic change can reach the domain
  * solely through `proposal.accept` performed by the user (ARCHITECTURE §22–24).
  */
@@ -42,6 +42,16 @@ export const COMMAND_POLICY = {
   "work.pause": ["user-ui", "system"],
   "work.recover": ["system"],
   "settings.dailyWorkTarget": ["user-ui", "system"],
+  // Universal `+` (Stage 6, ADR-0007): the user saves raw text; only the desktop's own processor
+  // (system) moves it through AI processing. mcp-ai can read Captures, never create or resolve them.
+  "capture.create": ["user-ui", "system"],
+  "capture.retry": ["user-ui", "system"],
+  "capture.process": ["system"],
+  // SAFE WRITE (ARCHITECTURE §22 B): a memory is context for future decisions only — it never changes
+  // strategy, the order, `Сейчас`, the route or any user setting.
+  "memory.save": ["mcp-ai", "system"],
+  // Forgetting is the user's decision only: the AI can add to memory, never erase it.
+  "memory.forget": ["user-ui", "system"],
 } as const satisfies Record<string, readonly Actor[]>;
 
 export type CommandName = keyof typeof COMMAND_POLICY;

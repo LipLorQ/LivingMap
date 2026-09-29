@@ -6,6 +6,7 @@ import type {
   AddStageInput,
   BlockActionInput,
   CalendarSnapshotDto,
+  CaptureDto,
   ChangeLogEntryDto,
   CompleteActionInput,
   ConnectCalendarInput,
@@ -16,9 +17,12 @@ import type {
   EditGoodLifeConditionInput,
   EditStageInput,
   ExecutionDto,
+  ForgetMemoryInput,
   GoodLifeConditionDto,
   IntentionDto,
+  ListCapturesInput,
   ListChangeHistoryInput,
+  MemoryDto,
   ProposalDto,
   RemoveGoodLifeConditionInput,
   ReopenActionInput,
@@ -27,11 +31,14 @@ import type {
   ReorderStagesInput,
   ResolveProposalInput,
   Result,
+  RetryCaptureInput,
+  SearchMemoryInput,
   SeasonDto,
   SetCurrentStageInput,
   SetDailyWorkTargetInput,
   StageDto,
   StateRevisionDto,
+  SubmitCaptureInput,
   UnblockActionInput,
   UpdateIntentionInput,
   UpdateSeasonFocusInput,
@@ -70,6 +77,11 @@ export const IPC_CHANNELS = {
   startWork: "lm:command:startWork",
   pauseWork: "lm:command:pauseWork",
   setDailyWorkTarget: "lm:command:setDailyWorkTarget",
+  listCaptures: "lm:query:listCaptures",
+  submitCapture: "lm:command:submitCapture",
+  retryCapture: "lm:command:retryCapture",
+  searchMemory: "lm:query:searchMemory",
+  forgetMemory: "lm:command:forgetMemory",
   stateChanged: "lm:event:stateChanged",
 } as const;
 
@@ -78,6 +90,8 @@ export type LivingMapApi = {
     getStateRevision(): Promise<Result<StateRevisionDto>>;
     getCurrentView(): Promise<Result<CurrentViewDto>>;
     listChangeHistory(input: ListChangeHistoryInput): Promise<Result<ChangeLogEntryDto[]>>;
+    listCaptures(input: ListCapturesInput): Promise<Result<CaptureDto[]>>;
+    searchMemory(input: SearchMemoryInput): Promise<Result<MemoryDto[]>>;
   };
   commands: {
     createSeason(input: CreateSeasonInput): Promise<Result<SeasonDto>>;
@@ -109,6 +123,11 @@ export type LivingMapApi = {
     startWork(input: WorkActionInput): Promise<Result<ExecutionDto>>;
     pauseWork(input: WorkActionInput): Promise<Result<ExecutionDto>>;
     setDailyWorkTarget(input: SetDailyWorkTargetInput): Promise<Result<ExecutionDto>>;
+    /** Universal `+`: resolves once the raw text is committed; AI processing continues in the background. */
+    submitCapture(input: SubmitCaptureInput): Promise<Result<CaptureDto>>;
+    retryCapture(input: RetryCaptureInput): Promise<Result<CaptureDto>>;
+    /** The user forgets a memory; the Capture it came from is kept as typed. */
+    forgetMemory(input: ForgetMemoryInput): Promise<Result<null>>;
   };
   events: {
     /** Returns an unsubscribe function. */

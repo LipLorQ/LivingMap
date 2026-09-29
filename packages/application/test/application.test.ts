@@ -35,6 +35,9 @@ function memoryStore(): Store & { revision: number; changes: string[]; rollbacks
   // Execution (Stage 5) is exercised against real SQLite (persistence-sqlite/test/execution.test.ts).
   const workReader = { findRunning: () => undefined, listByAction: () => [], listEndedSince: () => [] };
   const settingsReader = { dailyWorkTargetMinutes: () => 360 };
+  // Captures / Memory (Stage 6) are exercised against real SQLite (persistence-sqlite/test/capture.test.ts).
+  const capturesReader = { findById: () => undefined, listRecent: () => [], findNextPending: () => undefined };
+  const memoriesReader = { list: () => [], listBySourceCaptures: () => [] };
   const plansReader = { findByIntention: (iid: string) => [...planRows.values()].find((p) => p.intentionId === iid) };
   const proposalsReader = {
     findById: (id: string) => proposalRows.get(id),
@@ -81,6 +84,8 @@ function memoryStore(): Store & { revision: number; changes: string[]; rollbacks
         calendar: calendarReader,
         work: workReader,
         settings: settingsReader,
+        captures: capturesReader,
+        memories: memoriesReader,
         stateRevision: () => state.revision,
       }) as T,
     touchWorkHeartbeat: () => {},
@@ -232,6 +237,16 @@ function memoryStore(): Store & { revision: number; changes: string[]; rollbacks
           },
           work: { ...workReader, insert: () => {}, closeIfRunning: () => false },
           settings: { ...settingsReader, setDailyWorkTargetMinutes: () => {} },
+          captures: {
+            ...capturesReader,
+            insert: () => {},
+            claim: () => false,
+            finish: () => false,
+            requeue: () => false,
+            linkProposal: () => false,
+            recover: () => 0,
+          },
+          memories: { ...memoriesReader, insert: () => {}, remove: () => false },
           stateRevision: () => startRevision,
           recordChange: (c) => {
             state.changes.push(c.commandType);

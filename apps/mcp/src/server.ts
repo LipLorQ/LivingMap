@@ -3,10 +3,13 @@ import {
   CreateRouteProposalInputSchema,
   err,
   GetProposalInputSchema,
+  ListCapturesInputSchema,
   ListChangeHistoryInputSchema,
   ProposeDesiredResultChangeInputSchema,
   ReorderExistingActionsInputSchema,
   type Result,
+  SaveMemoryInputSchema,
+  SearchMemoryInputSchema,
 } from "@living-map/contracts";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -14,7 +17,8 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 /**
  * The complete MCP tool whitelist with its capability class (ARCHITECTURE §22, §39). The surface
  * itself encodes the boundary: there is no tool to accept/reject a proposal, write the domain
- * directly, run SQL, touch files/shell/migrations/policy, or change Season / Good Life Conditions.
+ * directly, run SQL, touch files/shell/migrations/policy, change Season / Good Life Conditions,
+ * create or resolve a Capture, or write to the external calendar.
  * Every tool delegates to one application query/command; policy is enforced there too.
  */
 export const MCP_TOOLS = {
@@ -22,9 +26,12 @@ export const MCP_TOOLS = {
   get_living_map_context: "read",
   get_history: "read",
   get_proposal: "read",
+  list_captures: "read",
+  search_memory: "read",
   create_route_proposal: "proposal",
   propose_desired_result_change: "proposal",
   reorder_existing_actions: "safe-write",
+  save_memory: "safe-write",
 } as const;
 export const MCP_TOOL_NAMES = Object.keys(MCP_TOOLS) as (keyof typeof MCP_TOOLS)[];
 
@@ -126,6 +133,39 @@ export function createLivingMapMcpServer(
       annotations: write,
     },
     (input) => run((ai) => ai.reorderExistingActions(input)),
+  );
+
+  server.registerTool(
+    "list_captures",
+    {
+      description:
+        "Recent raw inputs the user wrote into LivingMap's «+», newest first, exactly as typed, with processing state (pending / processing / processed / failed), the reply they got and memories saved from them.",
+      inputSchema: ListCapturesInputSchema,
+      annotations: read,
+    },
+    (input) => run((ai) => ai.listCaptures(input)),
+  );
+
+  server.registerTool(
+    "search_memory",
+    {
+      description:
+        "Search LivingMap's long-term memory: the user's earlier decisions, facts, observations, preferences/constraints, dated commitments and ideas. Case-insensitive word match; empty query = most recent. Use it before answering or planning.",
+      inputSchema: SearchMemoryInputSchema,
+      annotations: read,
+    },
+    (input) => run((ai) => ai.searchMemory(input)),
+  );
+
+  server.registerTool(
+    "save_memory",
+    {
+      description:
+        "SAFE WRITE, applied immediately: remember something the user said that matters later (decision, fact, observation, preference/constraint, dated commitment, idea, note). Link captureId when it comes from a «+» input. One memory of each type per capture: a second one of the same type for the same capture is a no-op. It never changes the route, the order, «Сейчас» or any setting — strategic changes still need a proposal.",
+      inputSchema: SaveMemoryInputSchema,
+      annotations: write,
+    },
+    (input) => run((ai) => ai.saveMemory(input)),
   );
 
   return server;

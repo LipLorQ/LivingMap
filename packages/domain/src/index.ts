@@ -10,12 +10,16 @@ export {
   reopenAction,
   unblockAction,
 } from "./action";
+export type { Capture, CaptureState } from "./capture";
+export { CAPTURE_AUTO_RETRY_ATTEMPTS, CAPTURE_TEXT_MAX, createCapture } from "./capture";
 export type { CurrentActionSelection, SelectableAction, WhyNowReason } from "./current-action";
 export { selectCurrentAction } from "./current-action";
 export type { GoodLifeCondition } from "./good-life-condition";
 export { CONDITION_TEXT_MAX, createGoodLifeCondition, editGoodLifeCondition } from "./good-life-condition";
 export type { Intention } from "./intention";
 export { createIntention, DESIRED_RESULT_MAX, editIntention, INTENTION_TITLE_MAX } from "./intention";
+export type { Memory, MemoryType } from "./memory";
+export { createMemory, MEMORY_TEXT_MAX, rankMemories } from "./memory";
 export type { OrderedActionPlan } from "./plan";
 export { createPlan, PLAN_RATIONALE_MAX, replacePlanOrder, unplannedActionIds, validateActionOrder } from "./plan";
 export type { Proposal, ProposalKind, ProposalStatus } from "./proposal";

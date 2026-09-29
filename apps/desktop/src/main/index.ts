@@ -2,6 +2,7 @@
 // → repositories → application services → IPC handlers.
 
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createApplication } from "@living-map/application";
 import { IPC_CHANNELS } from "@living-map/contracts/ipc";
 import {
@@ -14,6 +15,8 @@ import {
   uuidGenerator,
 } from "@living-map/persistence-sqlite";
 import { app, BrowserWindow, dialog, powerMonitor } from "electron";
+import { createCaptureProcessor } from "./ai/capture-processor";
+import { createClaudeCodeCliAiRunner } from "./ai/claude-code-cli";
 import { createCalendarOrchestrator } from "./calendar";
 import { registerIpcHandlers } from "./ipc";
 import { watchStateRevision } from "./revision-watcher";
@@ -76,7 +79,22 @@ app.whenReady().then(() => {
   const pauseWorkOnQuit = manageWorkLifecycle(application, powerMonitor);
 
   const calendar = createCalendarOrchestrator(application, resolveDataHome());
-  registerIpcHandlers(application, isTrustedRendererFrame, calendar);
+
+  // In-app AI (ADR-0007): the AI host is started only on demand and talks to the built LivingMap MCP
+  // server, run by this same Electron binary in Node mode against this app's data home.
+  const captures = createCaptureProcessor(
+    application,
+    createClaudeCodeCliAiRunner({
+      mcpServer: {
+        command: process.execPath,
+        args: [fileURLToPath(new URL("./mcp.js", import.meta.url))],
+        env: { ELECTRON_RUN_AS_NODE: "1", LIVING_MAP_HOME: resolveDataHome() },
+      },
+      workDir: join(resolveDataHome(), "ai-workdir"),
+    }),
+    (message) => console.error(`[living-map] ${message}`),
+  );
+  registerIpcHandlers(application, isTrustedRendererFrame, calendar, captures);
   // Refresh on launch (Stage 4 §7/§20): a no-op when never connected; otherwise the renderer sees
   // an up-to-date snapshot without the user having to press "Обновить" first. Fire-and-forget —
   // does not delay window creation, and the revision watcher below picks up the result.
@@ -88,9 +106,12 @@ app.whenReady().then(() => {
   });
 
   createMainWindow();
+  // After a crash mid-processing / pending from earlier: retried now, never by a background service.
+  captures.start();
 
   app.on("window-all-closed", () => app.quit());
   app.on("will-quit", () => {
+    captures.stop();
     stopWatching();
     pauseWorkOnQuit();
     handle.close();

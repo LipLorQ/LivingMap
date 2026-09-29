@@ -81,10 +81,10 @@ describe("MCP surface", () => {
       Object.entries(MCP_TOOLS)
         .filter(([, c]) => c === "safe-write")
         .map(([n]) => n),
-    ).toEqual(["reorder_existing_actions"]);
+    ).toEqual(["reorder_existing_actions", "save_memory"]);
     for (const n of names) {
       expect(n).not.toMatch(
-        /sql|exec|raw|shell|file|migrat|delete|policy|accept|approve|confirm|reject|season|condition/i,
+        /sql|exec|raw|shell|file|migrat|delete|policy|forget|accept|approve|confirm|reject|season|condition/i,
       );
     }
 
@@ -156,6 +156,47 @@ describe("desktop + separate MCP process share one SQLite", () => {
     app.commands.updateSeasonFocus(app.newContext("user-ui", "test"), { expectedVersion: 1, focus: "y" });
 
     expect(await call(client, "get_state_revision")).toEqual({ ok: true, value: { stateRevision: 2 } });
+  });
+});
+
+describe("Universal + and Memory over stdio (Stage 6)", () => {
+  it("the AI reads a pending Capture, saves a memory from it (safe write, mcp-ai) and finds it again", async () => {
+    const app = openDesktop();
+    const created = app.commands.createCapture(app.newContext("user-ui", "test"), {
+      rawText: "Я поняла, что больше не хочу жертвовать сном ради работы.",
+    });
+    if (!created.ok) throw new Error(created.error.message);
+    const client = await spawnMcp();
+
+    const pending = await call<{ id: string; rawText: string }[]>(client, "list_captures", { state: "pending" });
+    expect(pending).toMatchObject({ ok: true, value: [{ id: created.value.id }] });
+
+    const saved = await call<{ id: string; createdBy: string }>(client, "save_memory", {
+      type: "preference",
+      text: "Не жертвовать сном ради работы",
+      captureId: created.value.id,
+    });
+    expect(saved).toMatchObject({ ok: true, value: { createdBy: "mcp-ai" } });
+    expect(await call(client, "search_memory", { query: "сном" })).toMatchObject({
+      ok: true,
+      value: [{ text: "Не жертвовать сном ради работы", sourceCaptureId: created.value.id }],
+    });
+    // The Capture itself is untouched and still waits for the desktop's processor.
+    expect(await call(client, "list_captures", {})).toMatchObject({
+      ok: true,
+      value: [{ state: "pending", rawText: "Я поняла, что больше не хочу жертвовать сном ради работы." }],
+    });
+    expect(await call(client, "save_memory", { type: "bogus", text: "x" })).toMatchObject({ ok: false });
+
+    // Only the user forgets (desktop); MCP has no such tool and immediately stops returning it.
+    expect(
+      app.commands.forgetMemory(app.newContext("user-ui", "test"), { id: saved.ok ? saved.value.id : "" }),
+    ).toMatchObject({ ok: true });
+    expect(await call(client, "search_memory", { query: "сном" })).toEqual({ ok: true, value: [] });
+    expect(await call(client, "list_captures", {})).toMatchObject({
+      ok: true,
+      value: [{ rawText: "Я поняла, что больше не хочу жертвовать сном ради работы.", memories: [] }],
+    });
   });
 });
 

@@ -184,6 +184,48 @@ export const calendarSnapshot = sqliteTable(
 );
 
 /**
+ * Universal `+` inputs (ARCHITECTURE §34, ADR-0007). `raw_text` is the untouched original — an
+ * `UPDATE OF raw_text` trigger (custom migration) makes that a database fact. `result` is the
+ * validated AI interpretation (JSON), kept apart from the original.
+ */
+export const captures = sqliteTable(
+  "captures",
+  {
+    id: text("id").primaryKey(),
+    rawText: text("raw_text").notNull(),
+    source: text("source").notNull(),
+    createdAt: text("created_at").notNull(),
+    /** 'pending' | 'processing' | 'processed' | 'failed' (CaptureState). */
+    state: text("state").notNull(),
+    attempts: integer("attempts").notNull(),
+    lastError: text("last_error"),
+    result: text("result", { mode: "json" }).$type<unknown>(),
+    /** The Proposal created while processing this Capture (idempotent retry, ADR-0007). */
+    proposalId: text("proposal_id"),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => [index("captures_state_idx").on(t.state, t.createdAt), index("captures_created_idx").on(t.createdAt)],
+);
+
+/** Memory v1 (ARCHITECTURE §35): immutable remembered items, separate from the raw Capture. */
+export const memories = sqliteTable(
+  "memories",
+  {
+    id: text("id").primaryKey(),
+    type: text("type").notNull(),
+    text: text("text").notNull(),
+    sourceCaptureId: text("source_capture_id"),
+    linkedEntityIds: text("linked_entity_ids", { mode: "json" }).$type<string[]>().notNull(),
+    createdBy: text("created_by").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [
+    index("memories_source_capture_idx").on(t.sourceCaptureId),
+    foreignKey({ columns: [t.sourceCaptureId], foreignColumns: [captures.id] }),
+  ],
+);
+
+/**
  * AI proposals (ARCHITECTURE §23). `payload` is JSON validated against the typed contract schema
  * for `kind` by the application on creation and again before being applied — never trusted as is.
  */

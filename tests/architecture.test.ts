@@ -71,6 +71,22 @@ describe("dependency direction (ARCHITECTURE §6)", () => {
     expect(hits.map((f) => relative(root, f))).toEqual([]);
   });
 
+  it("the AI vendor stays in its adapter: domain/application/contracts/MCP never name it (ADR-0007)", () => {
+    const vendor = /claude|anthropic/i;
+    const hits = ["packages/domain/src", "packages/application/src", "packages/contracts/src", "apps/mcp/src"]
+      .flatMap(sourceFiles)
+      .filter((f) => vendor.test(readFileSync(f, "utf8")));
+    expect(hits.map((f) => relative(root, f))).toEqual([]);
+  });
+
+  it("only the Electron main AI adapter may start processes (ADR-0007)", () => {
+    const spawners = ["packages", "apps/mcp/src", "apps/desktop/src"]
+      .flatMap(sourceFiles)
+      .filter((f) => importsOf(f).includes("node:child_process"))
+      .map((f) => relative(root, f).replaceAll("\\", "/"));
+    expect(spawners).toEqual(["apps/desktop/src/main/ai/claude-code-cli.ts"]);
+  });
+
   it("MCP app can never decide a proposal or act as the user (Stage 3, ADR-0004)", () => {
     const forbidden =
       /\bacceptProposal\b|\brejectProposal\b|["']user-ui["']|["']system["']|\bnewContext\b|\.commands\b|\.queries\b/;

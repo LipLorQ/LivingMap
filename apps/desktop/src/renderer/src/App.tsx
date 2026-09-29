@@ -1,6 +1,7 @@
 import type {
   ActionDto,
   AppError,
+  CaptureDto,
   ChangeLogEntryDto,
   CurrentViewDto,
   GoodLifeConditionDto,
@@ -11,10 +12,12 @@ import type {
   StageWithActionsDto,
 } from "@living-map/contracts";
 import { useCallback, useEffect, useState } from "react";
+import { MemoryPanel } from "./memory";
 import { NowScreen } from "./now-screen";
+import { PlusPanel } from "./plus";
 import { PlanSection, ProposalsSection, STALE_PROPOSAL_TEXT } from "./proposals";
 
-type Tab = "now" | "editor";
+type Tab = "now" | "editor" | "memory";
 
 // Stage 4: "Сейчас" is the default screen (execution interface); the previous utilitarian
 // editing screen moves behind a "Замысел" tab (direct editing / fallback, per Stage 4 §15).
@@ -23,14 +26,19 @@ export function App() {
   const [history, setHistory] = useState<ChangeLogEntryDto[]>([]);
   const [lastError, setLastError] = useState<AppError | null>(null);
   const [tab, setTab] = useState<Tab>("now");
+  const [captures, setCaptures] = useState<CaptureDto[]>([]);
+  const [plusOpen, setPlusOpen] = useState(false);
+  const [plusDraft, setPlusDraft] = useState("");
 
   const reload = useCallback(async () => {
-    const [viewResult, historyResult] = await Promise.all([
+    const [viewResult, historyResult, capturesResult] = await Promise.all([
       window.livingMap.queries.getCurrentView(),
       window.livingMap.queries.listChangeHistory({ limit: 20 }),
+      window.livingMap.queries.listCaptures({ limit: 5 }),
     ]);
     if (viewResult.ok) setView(viewResult.value);
     if (historyResult.ok) setHistory(historyResult.value);
+    if (capturesResult.ok) setCaptures(capturesResult.value);
   }, []);
 
   useEffect(() => {
@@ -63,7 +71,17 @@ export function App() {
     <main className="mx-auto max-w-3xl space-y-8 p-6 font-sans text-sm text-neutral-900">
       <header className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Живая карта</h1>
-        <nav className="flex gap-2">
+        <nav className="flex items-center gap-2">
+          <button
+            type="button"
+            data-testid="plus-open"
+            aria-label="Написать Живой карте"
+            title="Написать Живой карте"
+            className="rounded-full border border-violet-500 bg-violet-600 px-3 text-lg leading-7 text-white"
+            onClick={() => setPlusOpen((open) => !open)}
+          >
+            +
+          </button>
           <button
             type="button"
             data-testid="nav-now"
@@ -82,6 +100,15 @@ export function App() {
           >
             Замысел
           </button>
+          <button
+            type="button"
+            data-testid="nav-memory"
+            aria-current={tab === "memory"}
+            className={tab === "memory" ? "font-semibold underline" : ""}
+            onClick={() => setTab("memory")}
+          >
+            Память
+          </button>
         </nav>
       </header>
 
@@ -91,18 +118,37 @@ export function App() {
         </p>
       )}
 
+      {plusOpen && (
+        <PlusPanel
+          draft={plusDraft}
+          onDraftChange={setPlusDraft}
+          onClose={() => setPlusOpen(false)}
+          captures={captures}
+          pendingProposalIds={new Set(view.pendingProposals.filter((p) => p.status === "pending").map((p) => p.id))}
+          onSubmit={(rawText) => run(window.livingMap.commands.submitCapture({ rawText }))}
+          onRetry={(id) => run(window.livingMap.commands.retryCapture({ id }))}
+        />
+      )}
+
       <ProposalsSection
         proposals={view.pendingProposals}
         onAccept={(id) => run(window.livingMap.commands.acceptProposal({ id }))}
         onReject={(id) => run(window.livingMap.commands.rejectProposal({ id }))}
       />
 
-      {tab === "now" ? (
+      {tab === "memory" ? (
+        <MemoryPanel onForget={(id) => run(window.livingMap.commands.forgetMemory({ id }))} />
+      ) : tab === "now" ? (
         <NowScreen
           view={view}
           onConnectCalendar={(icalUrl) => run(window.livingMap.commands.connectCalendar({ icalUrl }))}
           onRefreshCalendar={() => run(window.livingMap.commands.refreshCalendar())}
           onDisconnectCalendar={() => run(window.livingMap.commands.disconnectCalendar())}
+          onAskReplan={() => {
+            // Prefilled, never auto-sent: the user can edit the request first.
+            setPlusDraft((draft) => (draft.trim() ? draft : "Перестрой текущий порядок действий."));
+            setPlusOpen(true);
+          }}
           execution={{
             onStartWork: (actionId) => run(window.livingMap.commands.startWork({ actionId })),
             onPauseWork: (actionId) => run(window.livingMap.commands.pauseWork({ actionId })),
@@ -229,6 +275,11 @@ const HISTORY_LABELS: Record<string, string> = {
   "work.pause": "Работа поставлена на паузу",
   "work.recover": "Работа поставлена на паузу после сбоя",
   "settings.dailyWorkTarget": "Изменена рабочая норма",
+  "capture.create": "Сохранена запись «+»",
+  "capture.retry": "Запись «+» снова ждёт ИИ",
+  "capture.processed": "ИИ разобрал запись «+»",
+  "memory.save": "ИИ сохранил в память",
+  "memory.forget": "Удалено из памяти",
 };
 
 const PROPOSAL_KIND_LABELS: Record<string, string> = {

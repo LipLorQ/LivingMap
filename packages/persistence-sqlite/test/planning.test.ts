@@ -136,12 +136,12 @@ describe("migration from the completed Stage 2 schema", () => {
 });
 
 describe("capability classes", () => {
-  it("mcp-ai may only create proposals and run the whitelisted safe reorder", () => {
+  it("mcp-ai may only create proposals and run the whitelisted safe writes (reorder, memory)", () => {
     const aiCommands = Object.entries(COMMAND_POLICY)
       .filter(([, actors]) => (actors as readonly string[]).includes("mcp-ai"))
       .map(([name]) => name)
       .sort();
-    expect(aiCommands).toEqual(["plan.reorder", "proposal.create"]);
+    expect(aiCommands).toEqual(["memory.save", "plan.reorder", "proposal.create"]);
   });
 
   it("mcp-ai cannot accept/reject proposals or write the domain directly", () => {

@@ -3,12 +3,16 @@ import type {
   ActionRepository,
   CalendarSnapshotReader,
   CalendarSnapshotRepository,
+  CaptureReader,
+  CaptureRepository,
   ChangeLogReader,
   GoodLifeConditionReader,
   GoodLifeConditionRepository,
   IdGenerator,
   IntentionReader,
   IntentionRepository,
+  MemoryReader,
+  MemoryRepository,
   OrderedActionPlanReader,
   OrderedActionPlanRepository,
   ProposalReader,
@@ -28,24 +32,31 @@ import type { CalendarSnapshotDto } from "@living-map/contracts";
 import type {
   Action,
   ActionStatus,
+  Capture,
+  CaptureState,
   GoodLifeCondition,
   Instant,
   Intention,
+  Memory,
+  MemoryType,
   Proposal,
   ProposalKind,
   ProposalStatus,
   Season,
   Stage,
 } from "@living-map/domain";
-import { and, asc, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
+import type { SQLiteUpdateSetSource } from "drizzle-orm/sqlite-core";
 import type { Db, SqliteHandle } from "./connection";
 import { EXPECTED_SCHEMA_VERSION } from "./migrate";
 import {
   actions,
   calendarSnapshot,
+  captures,
   changeLog,
   goodLifeConditions,
   intentions,
+  memories,
   meta,
   orderedActionPlans,
   proposals,
@@ -193,7 +204,7 @@ function stageRepository(q: Tx): StageRepository {
     },
     setCurrent: (intentionId, stageId, now) => {
       // Two statements, each touching only the rows whose flag actually flips, so version/updatedAt
-      // bump exactly where something changed (ARCHITECTURE §13) instead of a blind overwrite.
+      // bump exactly where something changed (ARCHITECTURE Â§13) instead of a blind overwrite.
       q.update(stages)
         .set({ isCurrent: false, version: sql`${stages.version} + 1`, updatedAt: now })
         .where(and(eq(stages.intentionId, intentionId), eq(stages.isCurrent, true), sql`${stages.id} != ${stageId}`))
@@ -426,18 +437,142 @@ function settingsRepository(q: Tx): SettingsRepository {
   };
 }
 
+type CaptureRow = typeof captures.$inferSelect;
+const rowToCapture = (row: CaptureRow): Capture => ({
+  ...row,
+  source: row.source as Capture["source"],
+  state: row.state as CaptureState,
+  result: row.result ?? null,
+});
+
+function captureReader(q: Tx): CaptureReader {
+  return {
+    findById: (id) => {
+      const row = q.select().from(captures).where(eq(captures.id, id)).get();
+      return row ? rowToCapture(row) : undefined;
+    },
+    listRecent: (limit, state) =>
+      q
+        .select()
+        .from(captures)
+        .where(state ? eq(captures.state, state) : undefined)
+        .orderBy(desc(captures.createdAt), desc(sql`rowid`))
+        .limit(limit)
+        .all()
+        .map(rowToCapture),
+    findNextPending: () => {
+      const row = q
+        .select()
+        .from(captures)
+        .where(eq(captures.state, "pending"))
+        .orderBy(asc(captures.createdAt), asc(sql`rowid`))
+        .get();
+      return row ? rowToCapture(row) : undefined;
+    },
+  };
+}
+
+function captureRepository(q: Tx): CaptureRepository {
+  // Every transition names the states it may leave: a stale caller updates nothing (changes === 0).
+  const move = (id: string, from: CaptureState, set: SQLiteUpdateSetSource<typeof captures>) =>
+    q
+      .update(captures)
+      .set(set)
+      .where(and(eq(captures.id, id), eq(captures.state, from)))
+      .run().changes === 1;
+  return {
+    ...captureReader(q),
+    insert: (c: Capture) => void q.insert(captures).values(c).run(),
+    claim: (id, now) =>
+      move(id, "pending", { state: "processing", attempts: sql`${captures.attempts} + 1`, updatedAt: now }),
+    finish: (id, outcome, now) =>
+      move(
+        id,
+        "processing",
+        "result" in outcome
+          ? { state: "processed", result: outcome.result, lastError: null, updatedAt: now }
+          : { state: "failed", lastError: outcome.lastError, updatedAt: now },
+      ),
+    requeue: (id, now) => move(id, "failed", { state: "pending", updatedAt: now }),
+    linkProposal: (id, proposalId) =>
+      q
+        .update(captures)
+        .set({ proposalId })
+        // A killed/timed-out run's MCP child may commit its Proposal after the Capture is marked failed:
+        // still link it, so a retry answers ALREADY_PROPOSED instead of creating a second Proposal.
+        .where(and(eq(captures.id, id), inArray(captures.state, ["processing", "failed"]), isNull(captures.proposalId)))
+        .run().changes === 1,
+    recover: (maxAttempts, now) =>
+      // A run that crashed the app as often as the retry budget allows is given up, not re-run every launch.
+      q
+        .update(captures)
+        .set({ state: "failed", lastError: "failed", updatedAt: now })
+        .where(and(eq(captures.state, "processing"), sql`${captures.attempts} >= ${maxAttempts}`))
+        .run().changes +
+      q
+        .update(captures)
+        .set({ state: "pending", updatedAt: now })
+        .where(
+          or(
+            eq(captures.state, "processing"),
+            and(eq(captures.state, "failed"), sql`${captures.attempts} < ${maxAttempts}`),
+          ),
+        )
+        .run().changes,
+  };
+}
+
+type MemoryRow = typeof memories.$inferSelect;
+const rowToMemory = (row: MemoryRow): Memory => ({ ...row, type: row.type as MemoryType });
+
+function memoryReader(q: Tx): MemoryReader {
+  return {
+    // ponytail: whole table into memory for JS ranking (rankMemories); fine for one person's thousands
+    // of memories â€” move filtering into SQL/FTS5 if it ever shows up in a profile.
+    list: () => q.select().from(memories).orderBy(desc(memories.createdAt)).all().map(rowToMemory),
+    listBySourceCaptures: (captureIds) =>
+      captureIds.length === 0
+        ? []
+        : q
+            .select()
+            .from(memories)
+            .where(inArray(memories.sourceCaptureId, captureIds as string[]))
+            .orderBy(asc(memories.createdAt))
+            .all()
+            .map(rowToMemory),
+  };
+}
+
+function memoryRepository(q: Tx): MemoryRepository {
+  return {
+    ...memoryReader(q),
+    insert: (m: Memory) =>
+      void q
+        .insert(memories)
+        .values({ ...m, linkedEntityIds: [...m.linkedEntityIds] })
+        .run(),
+    remove: (id) => q.delete(memories).where(eq(memories.id, id)).run().changes > 0,
+  };
+}
+
+/**
+ * Bookkeeping of AI processing (claim / failure / launch recovery) bumps the revision so the UI
+ * refreshes, but is not a "meaningful change" (ARCHITECTURE Â§20): kept out of history and AI context.
+ */
+const UNLISTED_COMMANDS = ["calendar.save", "capture.claim", "capture.failed", "capture.recover"];
+
 function changeLogReader(q: Tx): ChangeLogReader {
   return {
     // One command may log several entries under one revision; rowid keeps their insertion order.
-    // `calendar.save` fires on every launch and every manual refresh — routine, not a "meaningful
-    // change" (ARCHITECTURE §20) — so it is excluded here rather than flooding the AI's
+    // `calendar.save` fires on every launch and every manual refresh â€” routine, not a "meaningful
+    // change" (ARCHITECTURE Â§20) â€” so it is excluded here rather than flooding the AI's
     // `recentHistory` context and the user-facing history feed; it is still recorded in the table for
     // the state-revision bump and direct inspection.
     listRecent: (limit) =>
       q
         .select()
         .from(changeLog)
-        .where(ne(changeLog.commandType, "calendar.save"))
+        .where(notInArray(changeLog.commandType, UNLISTED_COMMANDS))
         .orderBy(desc(changeLog.stateRevision), desc(sql`rowid`))
         .limit(limit)
         .all(),
@@ -474,13 +609,15 @@ export function createSqliteStore(handle: SqliteHandle, ids: IdGenerator): Store
             calendar: calendarSnapshotReader(tx),
             work: workReader(tx),
             settings: settingsReader(tx),
+            captures: captureReader(tx),
+            memories: memoryReader(tx),
             stateRevision: () => readRevision(tx),
           }),
         { behavior: "deferred" },
       ),
 
     // IMMEDIATE: take the write lock up front (waiting up to busy_timeout). A deferred
-    // read→write upgrade in WAL fails instantly with SQLITE_BUSY when another process committed.
+    // readâ†’write upgrade in WAL fails instantly with SQLITE_BUSY when another process committed.
     write: (ctx, work) =>
       db.transaction(
         (tx) => {
@@ -492,7 +629,7 @@ export function createSqliteStore(handle: SqliteHandle, ids: IdGenerator): Store
 
           const changesBefore = totalChanges();
           const startRevision = readRevision(tx);
-          // One command = one revision bump (ARCHITECTURE §14/§44), however many entries it logs.
+          // One command = one revision bump (ARCHITECTURE Â§14/Â§44), however many entries it logs.
           let revision: number | undefined;
           const result = work({
             season: seasonRepository(tx),
@@ -505,6 +642,8 @@ export function createSqliteStore(handle: SqliteHandle, ids: IdGenerator): Store
             calendar: calendarSnapshotRepository(tx),
             work: workRepository(tx),
             settings: settingsRepository(tx),
+            captures: captureRepository(tx),
+            memories: memoryRepository(tx),
             stateRevision: () => startRevision,
             recordChange: (change) => {
               if (revision === undefined) {
@@ -530,11 +669,11 @@ export function createSqliteStore(handle: SqliteHandle, ids: IdGenerator): Store
               return revision;
             },
           });
-          // Structural guarantee (ARCHITECTURE §44): a command must not depend on remembering to
+          // Structural guarantee (ARCHITECTURE Â§44): a command must not depend on remembering to
           // call recordChange. If it mutated rows without recording the change, roll back instead
-          // of silently breaking the change log / MCP→UI revision watch. Note: SQLite's
+          // of silently breaking the change log / MCPâ†’UI revision watch. Note: SQLite's
           // total_changes() counts a same-value UPDATE (`SET x = x`) as a change too, so a future
-          // idempotent no-op command would also need to call recordChange — no command does today.
+          // idempotent no-op command would also need to call recordChange â€” no command does today.
           if (revision === undefined && totalChanges() !== changesBefore) {
             throw new Error("Write transaction changed rows without calling recordChange()");
           }

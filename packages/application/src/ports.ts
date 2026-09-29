@@ -1,10 +1,13 @@
-import type { CalendarSnapshotDto } from "@living-map/contracts";
+import type { AiFailure, CalendarSnapshotDto, CaptureAiResult } from "@living-map/contracts";
 import type {
   Action,
+  Capture,
+  CaptureState,
   EntityId,
   GoodLifeCondition,
   Instant,
   Intention,
+  Memory,
   OrderedActionPlan,
   Proposal,
   Season,
@@ -142,6 +145,57 @@ export interface ProposalRepository extends ProposalReader {
   resolveIfPending(proposal: Proposal): boolean;
 }
 
+export interface CaptureReader {
+  findById(id: EntityId): Capture | undefined;
+  /** Newest first. */
+  listRecent(limit: number, state?: CaptureState): Capture[];
+  /** The oldest `pending` Capture, if any. */
+  findNextPending(): Capture | undefined;
+}
+
+/** State changes are conditional single-row updates: a stale caller changes nothing and gets false. */
+export interface CaptureRepository extends CaptureReader {
+  insert(capture: Capture): void;
+  /** pending → processing, attempts + 1. */
+  claim(id: EntityId, now: Instant): boolean;
+  /** processing → processed (with result) | failed (with lastError). */
+  finish(id: EntityId, outcome: { result: unknown } | { lastError: string }, now: Instant): boolean;
+  /** failed → pending. */
+  requeue(id: EntityId, now: Instant): boolean;
+  /** Links the Proposal made while this Capture is `processing`; only once. */
+  linkProposal(id: EntityId, proposalId: EntityId): boolean;
+  /** Launch recovery: processing → pending, and failed with attempts < `maxAttempts` → pending. Returns rows changed. */
+  recover(maxAttempts: number, now: Instant): number;
+}
+
+export interface MemoryReader {
+  list(): Memory[];
+  listBySourceCaptures(captureIds: readonly EntityId[]): Memory[];
+}
+
+export interface MemoryRepository extends MemoryReader {
+  insert(memory: Memory): void;
+  /** Hard delete; false when no such memory. */
+  remove(id: EntityId): boolean;
+}
+
+/**
+ * Replaceable AI transport (ADR-0007): what LivingMap needs from any AI host to interpret one Capture.
+ * Never throws and never touches storage itself — the AI acts only through the MCP AiSurface; every
+ * failure comes back as a vendor-neutral kind so the Capture stays saved and retryable.
+ */
+export type AiRunInput = { captureId: EntityId; rawText: string; createdAt: Instant };
+export type AiRunOutcome = { ok: true; result: CaptureAiResult } | { ok: false; failure: AiFailure };
+/** The part of a platform `AbortSignal` a runner needs (this package has no DOM/Node typings). */
+export type CancelSignal = {
+  readonly aborted: boolean;
+  addEventListener(type: "abort", listener: () => void, options?: { once?: boolean }): void;
+  removeEventListener(type: "abort", listener: () => void): void;
+};
+export interface AiRunner {
+  processCapture(input: AiRunInput, signal: CancelSignal): Promise<AiRunOutcome>;
+}
+
 /** Lightweight change-log entry (ARCHITECTURE §20); actor / correlation come from the command context. */
 export type ChangeRecord = {
   commandType: string;
@@ -174,6 +228,8 @@ export interface ReadScope {
   calendar: CalendarSnapshotReader;
   work: WorkIntervalReader;
   settings: SettingsReader;
+  captures: CaptureReader;
+  memories: MemoryReader;
   stateRevision(): number;
 }
 
@@ -188,6 +244,8 @@ export interface WriteScope {
   calendar: CalendarSnapshotRepository;
   work: WorkIntervalRepository;
   settings: SettingsRepository;
+  captures: CaptureRepository;
+  memories: MemoryRepository;
   /** The committed revision this transaction started from — still the pre-bump value after recordChange. */
   stateRevision(): number;
   /**

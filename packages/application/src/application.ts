@@ -3,8 +3,11 @@ import {
   type AddActionInput,
   type AddGoodLifeConditionInput,
   type AddStageInput,
+  AiFailureSchema,
   type BlockActionInput,
   type CalendarSnapshotDto,
+  CaptureAiResultSchema,
+  type CaptureDto,
   type ChangeLogEntryDto,
   type CompleteActionInput,
   type CreateIntentionInput,
@@ -16,10 +19,13 @@ import {
   type EditStageInput,
   type ExecutionDto,
   err,
+  type ForgetMemoryInput,
   type GetProposalInput,
   type GoodLifeConditionDto,
   type IntentionDto,
+  type ListCapturesInput,
   type ListChangeHistoryInput,
+  type MemoryDto,
   type OrderedActionPlanDto,
   ok,
   type PlanningContextDto,
@@ -33,12 +39,16 @@ import {
   type ReorderStagesInput,
   type ResolveProposalInput,
   type Result,
+  type RetryCaptureInput,
   type RoutePayload,
+  type SaveMemoryInput,
+  type SearchMemoryInput,
   type SeasonDto,
   type SetCurrentStageInput,
   type SetDailyWorkTargetInput,
   type StageDto,
   type StateRevisionDto,
+  type SubmitCaptureInput,
   type UnblockActionInput,
   type UpdateIntentionInput,
   type UpdateSeasonFocusInput,
@@ -50,12 +60,16 @@ import {
   applyRouteChange,
   type Blocker,
   blockAction,
+  CAPTURE_AUTO_RETRY_ATTEMPTS,
+  type Capture,
   closeAt,
   completeAction,
   computeReorder,
   createAction,
+  createCapture,
   createGoodLifeCondition,
   createIntention,
+  createMemory,
   createPlan,
   createProposal,
   createSeason,
@@ -72,8 +86,10 @@ import {
   isSilent,
   localDate,
   MAX_PENDING_PROPOSALS,
+  type Memory,
   type Proposal,
   type RouteChange,
+  rankMemories,
   reopenAction,
   replacePlanOrder,
   resolveProposal,
@@ -102,6 +118,7 @@ import {
 } from "./planning";
 import { type CommandName, isAllowed } from "./policy";
 import {
+  type AiRunOutcome,
   type ChangeLogEntry,
   type Clock,
   type IdGenerator,
@@ -130,6 +147,35 @@ const toStageDto = (stage: Stage): StageDto => ({ ...stage });
 const toBlockerDto = (blocker: Blocker | null) => (blocker ? { ...blocker } : null);
 const toActionDto = (action: Action): ActionDto => ({ ...action, blocker: toBlockerDto(action.blocker) });
 const toChangeLogEntryDto = (entry: ChangeLogEntry): ChangeLogEntryDto => ({ ...entry });
+const toMemoryDto = (m: Memory): MemoryDto => ({ ...m, linkedEntityIds: [...m.linkedEntityIds] });
+
+const FORGOTTEN_REPLY = "Этого больше нет в памяти.";
+
+/** Stored JSON is re-validated on the way out: an unreadable result/error reads as absent, never as trusted. */
+function toCaptureDtos(s: Pick<ReadScope, "memories">, captures: readonly Capture[]): CaptureDto[] {
+  const memories = s.memories.listBySourceCaptures(captures.map((c) => c.id));
+  return captures.map((c) => {
+    const result = CaptureAiResultSchema.safeParse(c.result);
+    const lastError = AiFailureSchema.safeParse(c.lastError);
+    const own = memories.filter((m) => m.sourceCaptureId === c.id).map(toMemoryDto);
+    // The user forgot what this run remembered: its old «Запомнила: …» reply must not keep echoing it to the
+    // UI or to later AI runs. The raw text stays as typed; only the derived reply is withheld.
+    const forgotten =
+      result.success && (result.data.kind === "memory" || result.data.kind === "commitment") && !own.length;
+    return {
+      id: c.id,
+      rawText: c.rawText,
+      source: c.source,
+      createdAt: c.createdAt,
+      state: c.state,
+      attempts: c.attempts,
+      lastError: lastError.success ? lastError.data : null,
+      result: !result.success ? null : forgotten ? { ...result.data, reply: FORGOTTEN_REPLY } : result.data,
+      proposalId: c.proposalId,
+      memories: own,
+    };
+  });
+}
 
 /** Carries a failed Result out of a write transaction so the store rolls it back. */
 class RollbackSignal {
@@ -327,6 +373,13 @@ export function createApplication(deps: ApplicationDeps) {
       rationale: string;
     },
   ): Result<ProposalDto> {
+    // Idempotent per Capture: a retried run gets the Proposal its earlier attempt already made, never a second one.
+    const capture = ctx.captureId ? s.captures.findById(ctx.captureId) : undefined;
+    const earlier = capture?.proposalId ? s.proposals.findById(capture.proposalId) : undefined;
+    if (earlier) {
+      const dto = toProposalDto(s, earlier, clock.now());
+      return dto ? ok(dto) : err("STORAGE_ERROR", "Proposal could not be read back");
+    }
     // Pending proposals that can no longer apply (stale or unreadable) are persisted as stale first,
     // so they neither occupy the pending limit nor linger invisibly.
     const now = clock.now();
@@ -353,6 +406,7 @@ export function createApplication(deps: ApplicationDeps) {
     });
     if (!created.ok) return err("VALIDATION_ERROR", created.reason);
     s.proposals.insert(created.value);
+    if (capture) s.captures.linkProposal(capture.id, created.value.id);
     s.recordChange({
       commandType: "proposal.create",
       entityType: "proposal",
@@ -474,6 +528,25 @@ export function createApplication(deps: ApplicationDeps) {
       listChangeHistory: (input: ListChangeHistoryInput): Result<ChangeLogEntryDto[]> =>
         guarded("listChangeHistory", () =>
           ok(store.read((s) => s.changeLog.listRecent(input.limit)).map(toChangeLogEntryDto)),
+        ),
+
+      /** Recent `+` Captures, newest first, with their processing state, AI result and saved memories. */
+      listCaptures: (input: ListCapturesInput): Result<CaptureDto[]> =>
+        guarded("listCaptures", () =>
+          ok(store.read((s) => toCaptureDtos(s, s.captures.listRecent(input.limit, input.state)))),
+        ),
+
+      searchMemory: (input: SearchMemoryInput): Result<MemoryDto[]> =>
+        guarded("searchMemory", () =>
+          ok(
+            store.read((s) =>
+              rankMemories(
+                s.memories.list().filter((m) => !input.entityId || m.linkedEntityIds.includes(input.entityId)),
+                input.query,
+                input.limit,
+              ).map(toMemoryDto),
+            ),
+          ),
         ),
     },
 
@@ -1257,6 +1330,173 @@ export function createApplication(deps: ApplicationDeps) {
               summary: `${input.minutes}`,
             });
             return ok(execution(s, currentActionId(s, now), now));
+          }),
+        ),
+
+      /** Universal `+`: the raw text is committed here, before any AI is involved (ARCHITECTURE §34). */
+      createCapture: (ctx: CommandContext, input: SubmitCaptureInput): Result<CaptureDto> =>
+        authorize("capture.create", ctx) ??
+        guarded("createCapture", () =>
+          transact(ctx, (s): Result<CaptureDto> => {
+            const created = createCapture({ id: ids.next(), rawText: input.rawText, now: clock.now() });
+            if (!created.ok) return err("VALIDATION_ERROR", created.reason);
+            s.captures.insert(created.value);
+            s.recordChange({
+              commandType: "capture.create",
+              entityType: "capture",
+              entityId: created.value.id,
+              summary: "saved",
+            });
+            return ok(toCaptureDtos(s, [created.value])[0] as CaptureDto);
+          }),
+        ),
+
+      /** «Повторить»: a failed Capture waits for the AI again. */
+      retryCapture: (ctx: CommandContext, input: RetryCaptureInput): Result<CaptureDto> =>
+        authorize("capture.retry", ctx) ??
+        guarded("retryCapture", () =>
+          transact(ctx, (s): Result<CaptureDto> => {
+            if (!s.captures.findById(input.id)) return err("NOT_FOUND", "Capture not found");
+            if (!s.captures.requeue(input.id, clock.now())) {
+              return err("CONFLICT_RELOAD", "Capture is not waiting for a retry; reload");
+            }
+            s.recordChange({
+              commandType: "capture.retry",
+              entityType: "capture",
+              entityId: input.id,
+              summary: "retry",
+            });
+            return ok(toCaptureDtos(s, [s.captures.findById(input.id) as Capture])[0] as CaptureDto);
+          }),
+        ),
+
+      /** Desktop processor only: atomically takes the oldest pending Capture (pending → processing). */
+      claimNextCapture: (ctx: CommandContext): Result<CaptureDto | null> =>
+        authorize("capture.process", ctx) ??
+        guarded("claimNextCapture", () =>
+          transact(ctx, (s): Result<CaptureDto | null> => {
+            const next = s.captures.findNextPending();
+            if (!next || !s.captures.claim(next.id, clock.now())) return ok(null);
+            s.recordChange({
+              commandType: "capture.claim",
+              entityType: "capture",
+              entityId: next.id,
+              summary: `attempt ${next.attempts + 1}`,
+            });
+            return ok(toCaptureDtos(s, [s.captures.findById(next.id) as Capture])[0] as CaptureDto);
+          }),
+        ),
+
+      /**
+       * Desktop processor only: records the AI outcome of a claimed Capture. The result is validated again
+       * here (never trusted from the transport); an unknown proposal id is dropped, not linked.
+       */
+      finishCapture: (ctx: CommandContext, input: { id: string; outcome: AiRunOutcome }): Result<CaptureDto> =>
+        authorize("capture.process", ctx) ??
+        guarded("finishCapture", () =>
+          transact(ctx, (s): Result<CaptureDto> => {
+            let outcome: { result: unknown } | { lastError: string };
+            if (input.outcome.ok) {
+              const parsed = CaptureAiResultSchema.safeParse(input.outcome.result);
+              // The recorded link wins over whatever id the AI reported.
+              const proposalId =
+                s.captures.findById(input.id)?.proposalId ?? (parsed.success && parsed.data.proposalId);
+              const proposal = proposalId && s.proposals.findById(proposalId);
+              outcome = parsed.success
+                ? {
+                    result: {
+                      ...parsed.data,
+                      proposalId: proposal && proposal.createdBy === "mcp-ai" ? proposal.id : null,
+                    },
+                  }
+                : { lastError: "malformed" };
+            } else {
+              outcome = { lastError: AiFailureSchema.catch("failed").parse(input.outcome.failure) };
+            }
+            if (!s.captures.finish(input.id, outcome, clock.now())) {
+              return err("CONFLICT_RELOAD", "Capture is not being processed");
+            }
+            s.recordChange({
+              commandType: "result" in outcome ? "capture.processed" : "capture.failed",
+              entityType: "capture",
+              entityId: input.id,
+              summary: "result" in outcome ? (outcome.result as { kind: string }).kind : outcome.lastError,
+            });
+            return ok(toCaptureDtos(s, [s.captures.findById(input.id) as Capture])[0] as CaptureDto);
+          }),
+        ),
+
+      /** Desktop launch only: an interrupted `processing` and a not-yet-exhausted `failed` wait again. */
+      recoverCaptures: (ctx: CommandContext): Result<number> =>
+        authorize("capture.process", ctx) ??
+        guarded("recoverCaptures", () =>
+          transact(ctx, (s): Result<number> => {
+            const changed = s.captures.recover(CAPTURE_AUTO_RETRY_ATTEMPTS, clock.now());
+            if (changed > 0) {
+              s.recordChange({
+                commandType: "capture.recover",
+                entityType: "capture",
+                entityId: "all",
+                summary: `${changed}`,
+              });
+            }
+            return ok(changed);
+          }),
+        ),
+
+      /** SAFE WRITE (mcp-ai): remember something. A second memory of the same type from the same Capture is a no-op. */
+      saveMemory: (ctx: CommandContext, input: SaveMemoryInput): Result<MemoryDto> =>
+        authorize("memory.save", ctx) ??
+        guarded("saveMemory", () =>
+          transact(ctx, (s): Result<MemoryDto> => {
+            // The run's own Capture (from its context) wins over the id the AI passed.
+            const captureId = ctx.captureId ?? input.captureId;
+            if (captureId && !s.captures.findById(captureId)) return err("NOT_FOUND", "Capture not found");
+            const missing = input.linkedEntityIds.find(
+              (id) =>
+                !s.intentions.findById(id) &&
+                !s.stages.findById(id) &&
+                !s.actions.findById(id) &&
+                !s.proposals.findById(id),
+            );
+            if (missing) return err("NOT_FOUND", `Linked entity ${missing} not found`);
+            const created = createMemory({
+              id: ids.next(),
+              type: input.type,
+              text: input.text,
+              sourceCaptureId: captureId,
+              linkedEntityIds: input.linkedEntityIds,
+              createdBy: ctx.actor,
+              now: clock.now(),
+            });
+            if (!created.ok) return err("VALIDATION_ERROR", created.reason);
+            // ponytail: one memory per type per Capture, so a retried run cannot store a reworded duplicate;
+            // a Capture holding two ideas keeps the first — key by content if that ever matters.
+            const same =
+              captureId && s.memories.listBySourceCaptures([captureId]).find((m) => m.type === created.value.type);
+            if (same) return ok(toMemoryDto(same));
+            s.memories.insert(created.value);
+            s.recordChange({
+              commandType: "memory.save",
+              entityType: "memory",
+              entityId: created.value.id,
+              summary: created.value.type,
+            });
+            return ok(toMemoryDto(created.value));
+          }),
+        ),
+
+      /**
+       * USER-only: forget a memory. Hard delete, so search, MCP and every future AI run lose it at once;
+       * the source Capture (what the user actually typed) is left untouched.
+       */
+      forgetMemory: (ctx: CommandContext, input: ForgetMemoryInput): Result<null> =>
+        authorize("memory.forget", ctx) ??
+        guarded("forgetMemory", () =>
+          transact(ctx, (s): Result<null> => {
+            if (!s.memories.remove(input.id)) return err("NOT_FOUND", "Memory not found");
+            s.recordChange({ commandType: "memory.forget", entityType: "memory", entityId: input.id, summary: "" });
+            return ok(null);
           }),
         ),
     },

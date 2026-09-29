@@ -13,7 +13,12 @@ const workspacePackages = [
 
 export default defineConfig({
   main: {
-    build: { externalizeDeps: { exclude: workspacePackages } },
+    build: {
+      externalizeDeps: { exclude: workspacePackages },
+      // The MCP server ships with the desktop build (out/main/mcp.js): the in-app AI host starts it with
+      // this Electron in Node mode (ADR-0007) — no tsx, no repo-relative source paths.
+      rollupOptions: { input: { index: "src/main/index.ts", mcp: "../mcp/src/main.ts" } },
+    },
   },
   preload: {
     build: {

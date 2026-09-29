@@ -8,6 +8,8 @@ const api: LivingMapApi = {
     getStateRevision: () => ipcRenderer.invoke(IPC_CHANNELS.getStateRevision),
     getCurrentView: () => ipcRenderer.invoke(IPC_CHANNELS.getCurrentView),
     listChangeHistory: (input) => ipcRenderer.invoke(IPC_CHANNELS.listChangeHistory, input),
+    listCaptures: (input) => ipcRenderer.invoke(IPC_CHANNELS.listCaptures, input),
+    searchMemory: (input) => ipcRenderer.invoke(IPC_CHANNELS.searchMemory, input),
   },
   commands: {
     createSeason: (input) => ipcRenderer.invoke(IPC_CHANNELS.createSeason, input),
@@ -37,6 +39,9 @@ const api: LivingMapApi = {
     startWork: (input) => ipcRenderer.invoke(IPC_CHANNELS.startWork, input),
     pauseWork: (input) => ipcRenderer.invoke(IPC_CHANNELS.pauseWork, input),
     setDailyWorkTarget: (input) => ipcRenderer.invoke(IPC_CHANNELS.setDailyWorkTarget, input),
+    submitCapture: (input) => ipcRenderer.invoke(IPC_CHANNELS.submitCapture, input),
+    retryCapture: (input) => ipcRenderer.invoke(IPC_CHANNELS.retryCapture, input),
+    forgetMemory: (input) => ipcRenderer.invoke(IPC_CHANNELS.forgetMemory, input),
   },
   events: {
     onStateChanged: (listener) => {

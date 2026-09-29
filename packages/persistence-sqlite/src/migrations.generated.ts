@@ -75,5 +75,29 @@ export const MIGRATIONS: ReadonlyArray<{ tag: string; statements: readonly strin
     "statements": [
       "-- Custom SQL migration: the single settings row; the daily work target starts at 6 hours (DEVELOPMENT_PLAN §4.4) and is user-changeable.\nINSERT INTO `settings` (`id`, `daily_work_target_minutes`) VALUES (1, 360);"
     ]
+  },
+  {
+    "tag": "0010_add_captures_and_memories",
+    "statements": [
+      "CREATE TABLE `captures` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`raw_text` text NOT NULL,\n\t`source` text NOT NULL,\n\t`created_at` text NOT NULL,\n\t`state` text NOT NULL,\n\t`attempts` integer NOT NULL,\n\t`last_error` text,\n\t`result` text,\n\t`updated_at` text NOT NULL\n);",
+      "CREATE INDEX `captures_state_idx` ON `captures` (`state`,`created_at`);",
+      "CREATE INDEX `captures_created_idx` ON `captures` (`created_at`);",
+      "CREATE TABLE `memories` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`type` text NOT NULL,\n\t`text` text NOT NULL,\n\t`source_capture_id` text,\n\t`linked_entity_ids` text NOT NULL,\n\t`created_by` text NOT NULL,\n\t`created_at` text NOT NULL,\n\tFOREIGN KEY (`source_capture_id`) REFERENCES `captures`(`id`) ON UPDATE no action ON DELETE no action\n);",
+      "CREATE INDEX `memories_source_capture_idx` ON `memories` (`source_capture_id`);"
+    ]
+  },
+  {
+    "tag": "0011_capture_raw_text_immutable",
+    "statements": [
+      "-- Custom SQL migration: the raw `+` original is immutable as a database fact (ARCHITECTURE §34, ADR-0007).\nCREATE TRIGGER `captures_raw_text_immutable` BEFORE UPDATE OF `raw_text` ON `captures`\nWHEN NEW.`raw_text` IS NOT OLD.`raw_text`\nBEGIN\n  SELECT RAISE(ABORT, 'captures.raw_text is immutable');\nEND;"
+    ]
+  },
+  {
+    "tag": "0012_capture_proposal_link",
+    "statements": [
+      "ALTER TABLE `captures` ADD `proposal_id` text;",
+      "-- Custom backfill for Captures processed before the link existed (Stage 6, Gate B). A recorded result names\n-- its Proposal; a failed attempt is linked to the mcp-ai Proposal created between that attempt's claim and\n-- its finish (processing is single-flight, one desktop per database).\n-- ponytail: an mcp-ai Proposal from another MCP host inside that window would be misattributed; only\n-- pre-link history is affected, every newer run is linked explicitly through its context.\nUPDATE `captures` SET `proposal_id` = json_extract(`result`, '$.proposalId')\nWHERE `proposal_id` IS NULL AND json_extract(`result`, '$.proposalId') IS NOT NULL;",
+      "UPDATE `captures` SET `proposal_id` = (\n  SELECT p.`entity_id` FROM `change_log` p\n  JOIN `change_log` c ON c.`entity_id` = `captures`.`id` AND c.`command_type` = 'capture.claim'\n  WHERE p.`command_type` = 'proposal.create' AND p.`actor` = 'mcp-ai' AND p.`timestamp` >= c.`timestamp`\n    AND p.`timestamp` < (\n      SELECT min(f.`timestamp`) FROM `change_log` f\n      WHERE f.`entity_id` = `captures`.`id` AND f.`command_type` IN ('capture.failed', 'capture.processed')\n        AND f.`timestamp` > c.`timestamp`\n    )\n  ORDER BY p.`timestamp` LIMIT 1\n)\nWHERE `proposal_id` IS NULL AND `state` = 'failed';"
+    ]
   }
 ];

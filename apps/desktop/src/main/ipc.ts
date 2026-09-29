@@ -12,6 +12,8 @@ import {
   EditGoodLifeConditionInputSchema,
   EditStageInputSchema,
   err,
+  ForgetMemoryInputSchema,
+  ListCapturesInputSchema,
   ListChangeHistoryInputSchema,
   RemoveGoodLifeConditionInputSchema,
   ReopenActionInputSchema,
@@ -20,8 +22,11 @@ import {
   ReorderStagesInputSchema,
   ResolveProposalInputSchema,
   type Result,
+  RetryCaptureInputSchema,
+  SearchMemoryInputSchema,
   SetCurrentStageInputSchema,
   SetDailyWorkTargetInputSchema,
+  SubmitCaptureInputSchema,
   UnblockActionInputSchema,
   UpdateIntentionInputSchema,
   UpdateSeasonFocusInputSchema,
@@ -30,6 +35,7 @@ import {
 import { IPC_CHANNELS } from "@living-map/contracts/ipc";
 import { ipcMain, type WebFrameMain } from "electron";
 import { z } from "zod";
+import type { CaptureProcessor } from "./ai/capture-processor";
 import type { CalendarOrchestrator } from "./calendar";
 
 type TrustCheck = (frame: WebFrameMain | null) => boolean;
@@ -38,7 +44,12 @@ type TrustCheck = (frame: WebFrameMain | null) => boolean;
  * The renderer is an untrusted boundary (ARCHITECTURE §30): every payload is re-validated here,
  * the sender frame is checked, and handlers only delegate to application use cases.
  */
-export function registerIpcHandlers(app: Application, isTrusted: TrustCheck, calendar: CalendarOrchestrator): void {
+export function registerIpcHandlers(
+  app: Application,
+  isTrusted: TrustCheck,
+  calendar: CalendarOrchestrator,
+  captures: CaptureProcessor,
+): void {
   function handle<S extends z.ZodType>(
     channel: string,
     schema: S | null,
@@ -116,4 +127,22 @@ export function registerIpcHandlers(app: Application, isTrusted: TrustCheck, cal
   handle(IPC_CHANNELS.setDailyWorkTarget, SetDailyWorkTargetInputSchema, (input) =>
     app.commands.setDailyWorkTarget(ui(), input),
   );
+
+  // Universal `+` (ADR-0007): the Capture is committed first; only then may the AI processor pick it up.
+  // The renderer never influences how (or whether) an AI process is started.
+  handle(IPC_CHANNELS.listCaptures, ListCapturesInputSchema, (input) => app.queries.listCaptures(input));
+  const thenProcess = <T>(result: Result<T>): Result<T> => {
+    if (result.ok) captures.kick();
+    return result;
+  };
+  handle(IPC_CHANNELS.submitCapture, SubmitCaptureInputSchema, (input) =>
+    thenProcess(app.commands.createCapture(ui(), input)),
+  );
+  handle(IPC_CHANNELS.retryCapture, RetryCaptureInputSchema, (input) =>
+    thenProcess(app.commands.retryCapture(ui(), input)),
+  );
+
+  // Memory v1: the user can see what LivingMap remembered and forget it (never reachable from MCP).
+  handle(IPC_CHANNELS.searchMemory, SearchMemoryInputSchema, (input) => app.queries.searchMemory(input));
+  handle(IPC_CHANNELS.forgetMemory, ForgetMemoryInputSchema, (input) => app.commands.forgetMemory(ui(), input));
 }

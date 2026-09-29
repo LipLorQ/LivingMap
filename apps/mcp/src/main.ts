@@ -42,7 +42,10 @@ function resolveBackend(): McpBackend {
       reportError: (operation, error) =>
         console.error(`[living-map-mcp] ${operation} failed: ${error instanceof Error ? error.name : "unknown"}`),
     });
-    ready = { backend: { status: "ready", ai: createAiSurface(app) }, handle: opened.handle };
+    ready = {
+      backend: { status: "ready", ai: createAiSurface(app, process.env.LIVING_MAP_CAPTURE_ID?.trim() || undefined) },
+      handle: opened.handle,
+    };
     return ready.backend;
   }
   if (opened.status === "incompatible") opened.handle.close();

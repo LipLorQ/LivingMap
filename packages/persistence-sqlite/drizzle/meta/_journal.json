@@ -71,6 +71,27 @@
       "when": 1790603826641,
       "tag": "0009_seed_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1790613916067,
+      "tag": "0010_add_captures_and_memories",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1790613917603,
+      "tag": "0011_capture_raw_text_immutable",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1790660313152,
+      "tag": "0012_capture_proposal_link",
+      "breakpoints": true
     }
   ]
 }

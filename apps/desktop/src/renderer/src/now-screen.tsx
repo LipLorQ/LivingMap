@@ -274,13 +274,18 @@ function CurrentActionCard({
   );
 }
 
-function NeedsAiReplan() {
+function NeedsAiReplan({ onAskReplan }: { onAskReplan: () => void }) {
   return (
-    <div data-testid="now-needs-replan" className="space-y-1 rounded border-2 border-amber-400 bg-amber-50 p-3">
+    <div data-testid="now-needs-replan" className="space-y-2 rounded border-2 border-amber-400 bg-amber-50 p-3">
       <p className="font-semibold">Текущий порядок больше не подходит к реальности.</p>
-      <p className="text-neutral-700">
-        Попроси ИИ перестроить порядок действий — открой подключённый ИИ и попроси предложить новый маршрут.
-      </p>
+      <button
+        type="button"
+        data-testid="ask-replan"
+        className="rounded border border-violet-500 bg-violet-600 px-3 py-1 text-white"
+        onClick={onAskReplan}
+      >
+        Попросить ИИ перестроить
+      </button>
     </div>
   );
 }
@@ -400,9 +405,11 @@ export function NowScreen({
   onConnectCalendar,
   onRefreshCalendar,
   onDisconnectCalendar,
+  onAskReplan,
   execution,
 }: {
   view: CurrentViewDto;
+  onAskReplan: () => void;
   execution: ExecutionHandlers;
   onConnectCalendar: (icalUrl: string) => Promise<unknown>;
   onRefreshCalendar: () => Promise<unknown>;
@@ -423,7 +430,7 @@ export function NowScreen({
           <p data-testid="now-empty">Пока нет активного Замысла. Начни с вкладки «Замысел».</p>
         ) : view.needsAiReplan || !view.currentAction ? (
           <>
-            <NeedsAiReplan />
+            <NeedsAiReplan onAskReplan={onAskReplan} />
             <p data-testid="work-today-idle" className="mt-2 text-xs text-neutral-600">
               Сегодня: {formatDuration(view.execution.todayWorkedMs)} /{" "}
               {formatDuration(view.execution.dailyWorkTargetMinutes * 60_000)} · За неделю:{" "}

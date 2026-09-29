@@ -12,6 +12,8 @@ export type CommandContext = {
   readonly source: CommandSource;
   readonly correlationId: EntityId;
   readonly timestamp: Instant;
+  /** Set only for the AI run processing this `+` Capture (desktop → MCP child env): its writes are linked to it. */
+  readonly captureId?: EntityId;
 };
 
 export function createCommandContext(

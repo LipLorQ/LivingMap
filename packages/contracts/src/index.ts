@@ -23,6 +23,35 @@ export {
 } from "./action";
 export type { CalendarEventDto, CalendarSnapshotDto, ConnectCalendarInput } from "./calendar";
 export { CalendarEventDtoSchema, CalendarSnapshotDtoSchema, ConnectCalendarInputSchema } from "./calendar";
+export type {
+  AiFailure,
+  CaptureAiResult,
+  CaptureDto,
+  CaptureState,
+  ForgetMemoryInput,
+  ListCapturesInput,
+  MemoryDto,
+  MemoryType,
+  RetryCaptureInput,
+  SaveMemoryInput,
+  SearchMemoryInput,
+  SubmitCaptureInput,
+} from "./capture";
+export {
+  AiFailureSchema,
+  CAPTURE_TEXT_MAX,
+  CaptureAiResultSchema,
+  CaptureDtoSchema,
+  CaptureStateSchema,
+  ForgetMemoryInputSchema,
+  ListCapturesInputSchema,
+  MemoryDtoSchema,
+  MemoryTypeSchema,
+  RetryCaptureInputSchema,
+  SaveMemoryInputSchema,
+  SearchMemoryInputSchema,
+  SubmitCaptureInputSchema,
+} from "./capture";
 export type { ChangeLogEntryDto, ListChangeHistoryInput } from "./change-log";
 export { ChangeLogEntryDtoSchema, ListChangeHistoryInputSchema } from "./change-log";
 export type { AppError, AppErrorCode, Result } from "./errors";
