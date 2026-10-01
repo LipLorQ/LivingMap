@@ -99,5 +99,39 @@ export const MIGRATIONS: ReadonlyArray<{ tag: string; statements: readonly strin
       "-- Custom backfill for Captures processed before the link existed (Stage 6, Gate B). A recorded result names\n-- its Proposal; a failed attempt is linked to the mcp-ai Proposal created between that attempt's claim and\n-- its finish (processing is single-flight, one desktop per database).\n-- ponytail: an mcp-ai Proposal from another MCP host inside that window would be misattributed; only\n-- pre-link history is affected, every newer run is linked explicitly through its context.\nUPDATE `captures` SET `proposal_id` = json_extract(`result`, '$.proposalId')\nWHERE `proposal_id` IS NULL AND json_extract(`result`, '$.proposalId') IS NOT NULL;",
       "UPDATE `captures` SET `proposal_id` = (\n  SELECT p.`entity_id` FROM `change_log` p\n  JOIN `change_log` c ON c.`entity_id` = `captures`.`id` AND c.`command_type` = 'capture.claim'\n  WHERE p.`command_type` = 'proposal.create' AND p.`actor` = 'mcp-ai' AND p.`timestamp` >= c.`timestamp`\n    AND p.`timestamp` < (\n      SELECT min(f.`timestamp`) FROM `change_log` f\n      WHERE f.`entity_id` = `captures`.`id` AND f.`command_type` IN ('capture.failed', 'capture.processed')\n        AND f.`timestamp` > c.`timestamp`\n    )\n  ORDER BY p.`timestamp` LIMIT 1\n)\nWHERE `proposal_id` IS NULL AND `state` = 'failed';"
     ]
+  },
+  {
+    "tag": "0013_add_reviews_and_patterns",
+    "statements": [
+      "CREATE TABLE `patterns` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`pattern_key` text NOT NULL,\n\t`text` text NOT NULL,\n\t`status` text NOT NULL,\n\t`evidence_finding_ids` text NOT NULL,\n\t`created_at` text NOT NULL,\n\t`updated_at` text NOT NULL,\n\t`resolved_at` text,\n\t`resolved_by` text\n);",
+      "CREATE INDEX `patterns_status_idx` ON `patterns` (`status`);",
+      "CREATE INDEX `patterns_key_idx` ON `patterns` (`pattern_key`);",
+      "CREATE TABLE `planning_rules` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`text` text NOT NULL,\n\t`status` text NOT NULL,\n\t`source_pattern_id` text NOT NULL,\n\t`created_at` text NOT NULL,\n\t`deactivated_at` text,\n\tFOREIGN KEY (`source_pattern_id`) REFERENCES `patterns`(`id`) ON UPDATE no action ON DELETE no action\n);",
+      "CREATE INDEX `planning_rules_status_idx` ON `planning_rules` (`status`);",
+      "CREATE TABLE `review_findings` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`review_id` text NOT NULL,\n\t`text` text NOT NULL,\n\t`evidence_refs` text NOT NULL,\n\t`suggestion` text,\n\t`pattern_key` text,\n\t`status` text NOT NULL,\n\t`corrected_text` text,\n\t`created_at` text NOT NULL,\n\t`updated_at` text NOT NULL,\n\tFOREIGN KEY (`review_id`) REFERENCES `reviews`(`id`) ON UPDATE no action ON DELETE cascade\n);",
+      "CREATE INDEX `review_findings_review_idx` ON `review_findings` (`review_id`);",
+      "CREATE INDEX `review_findings_pattern_key_idx` ON `review_findings` (`pattern_key`);",
+      "CREATE TABLE `reviews` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`type` text NOT NULL,\n\t`period_start` text NOT NULL,\n\t`period_end` text NOT NULL,\n\t`time_zone` text NOT NULL,\n\t`status` text NOT NULL,\n\t`attempts` integer NOT NULL,\n\t`last_error` text,\n\t`created_at` text NOT NULL,\n\t`updated_at` text NOT NULL\n);",
+      "CREATE UNIQUE INDEX `reviews_type_period_idx` ON `reviews` (`type`,`period_start`,`period_end`);",
+      "CREATE INDEX `reviews_type_status_idx` ON `reviews` (`type`,`status`);"
+    ]
+  },
+  {
+    "tag": "0014_review_finding_fact_ids",
+    "statements": [
+      "-- Custom SQL migration: existing rows predate canonical fact identity (Stage 7 H2 fix) and get an\n-- empty set — conservative (they simply stop contributing to independence checks until reprocessed),\n-- never a fabricated provenance guess.\nALTER TABLE `review_findings` ADD `evidence_fact_ids` text DEFAULT '[]' NOT NULL;"
+    ]
+  },
+  {
+    "tag": "0015_change_log_source_capture_id",
+    "statements": [
+      "-- Custom SQL migration: lets a change_log entry written under a Capture's AI job (ctx.captureId) link\n-- back to that Capture, the same provenance H2 already gives Memory.sourceCaptureId — closes the\n-- Capture -> plan.reorder gap (mcp-ai's other SAFE WRITE besides memory.save/proposal.create). NULL for\n-- existing rows and any entry not produced from a Capture; never a fabricated guess.\nALTER TABLE `change_log` ADD `source_capture_id` text;"
+    ]
+  },
+  {
+    "tag": "0016_memory_source_capture_verified",
+    "statements": [
+      "-- Custom SQL migration: distinguishes a Memory's Stage-6 Capture association (`source_capture_id`,\n-- settable by an AI-supplied argument from any session) from verified Capture provenance trusted by\n-- Stage 7 Pattern independence (`review-evidence.ts`) — only true when the link came from the trusted\n-- Capture-processing job context (`ctx.captureId`), never an untethered/interactive session's say-so\n-- (M-A, ADR-0008). Existing rows predate this column, and inside the shipped desktop app the only\n-- code path that ever set `source_capture_id` was the trusted Capture-processing job (the AI-supplied\n-- argument was always overridden by ctx.captureId when both were present, application.ts) — a\n-- developer's own interactive MCP session against the same real database file (the repo's `.mcp.json`,\n-- or a manually configured Claude Desktop chat per ADR-0004) could in principle have set an unverified\n-- one, but is not part of the shipped product's own behavior. Backfilled to verified rather than\n-- defaulted to unverified, which would silently drop real H2/H-A provenance the moment this migration\n-- runs against the owner's own database.\nALTER TABLE `memories` ADD `source_capture_verified` integer DEFAULT false NOT NULL;\nUPDATE `memories` SET `source_capture_verified` = 1 WHERE `source_capture_id` IS NOT NULL;"
+    ]
   }
 ];

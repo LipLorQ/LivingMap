@@ -57,6 +57,10 @@ export const PLANNING_MEANINGS: Record<string, string> = {
     "«Исполнение» — factual work time the user tracked with Начать/Пауза/Продолжить/Готово: state of the current Action (idle/running/paused), all time worked on it, today's and this week's totals (local days, Monday-start weeks) and the user's daily work target. Facts, not a score. You can read it; you cannot start, pause or change it.",
   calendarSnapshot:
     "«Календарь» — read-only calendar snapshot (private iCal feed) LivingMap itself refreshed and stored. connected=false or a stale syncedAt means treat it as unavailable, not as ground truth.",
+  reviewInbox:
+    "«Разборы» (Stage 7): counts only, for the nav badge. Reviews are a separate learning surface you do not participate in through this context.",
+  activePlanningRules:
+    "Durable context the user confirmed from a repeated pattern in «Разборы» (e.g. «медицинские визиты обычно съедают половину рабочего дня»). Treat each as real context for planning/replanning — never a rigid rule you enforce mechanically, and never something you can create, confirm or deactivate yourself. An empty list is normal and means nothing has been confirmed yet.",
 };
 
 type PlanningScope = Pick<ReadScope, "season" | "goodLifeConditions" | "intentions" | "stages" | "actions" | "plans">;

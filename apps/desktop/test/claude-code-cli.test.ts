@@ -1,12 +1,15 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
+import type { ReviewEvidencePack } from "@living-map/application";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   buildClaudeArgs,
+  buildReviewClaudeArgs,
   childEnv,
   createClaudeCodeCliAiRunner,
   interpretCliOutput,
+  interpretReviewCliOutput,
   resolveClaudeExecutable,
   runProcess,
 } from "../src/main/ai/claude-code-cli";
@@ -140,6 +143,86 @@ describe("output interpretation — only structured_output is trusted", () => {
   });
 });
 
+const EVIDENCE: ReviewEvidencePack = {
+  reviewId: "00000000-0000-4000-8000-000000000009",
+  type: "daily",
+  periodStart: "2026-09-24T21:00:00.000Z",
+  periodEnd: "2026-09-25T21:00:00.000Z",
+  timeZone: "Europe/Moscow",
+  items: [
+    { id: "action:1", text: "Завершено действие «Написать код» (готово, когда: PR merged)", factIds: ["action:1"] },
+  ],
+  truncated: false,
+  knownPatternThemes: [],
+};
+const NO_USEFUL_CHANGE = { kind: "no_useful_change" };
+const NO_USEFUL_CHANGE_ENVELOPE = { result: NO_USEFUL_CHANGE };
+
+describe("Review job (Stage 7): every MCP server blocked, evidence travels only on stdin", () => {
+  it("no built-in tools and no MCP server at all — a Review job has nothing to call", () => {
+    const args = buildReviewClaudeArgs();
+    const flag = (name: string) => args[args.indexOf(name) + 1];
+    expect(args[0]).toBe("-p");
+    expect(flag("--tools")).toBe("");
+    expect(args).toContain("--strict-mcp-config"); // also blocks the user's own ~/.claude.json / project .mcp.json servers
+    expect(JSON.parse(flag("--mcp-config") as string)).toEqual({ mcpServers: {} });
+    expect(args).not.toContain("--allowedTools");
+    expect(flag("--permission-mode")).toBe("dontAsk");
+    // Regression (Gate B live 400): Claude's custom-tool input_schema requires a top-level
+    // `type: "object"` — a discriminated union's raw JSON Schema is a root `oneOf` with none, which
+    // Claude Code silently passed through to a real API call that then failed with
+    // `tools.0.custom.input_schema.type: Field required`. This must stay `object` at the root, with
+    // the discriminated union preserved one level down, inside `result`.
+    const schema = JSON.parse(flag("--json-schema") as string);
+    expect(schema.type).toBe("object");
+    expect(schema.required).toEqual(["result"]);
+    expect(schema.properties.result.oneOf).toEqual([
+      expect.objectContaining({ type: "object" }),
+      expect.objectContaining({ type: "object" }),
+    ]);
+    expect(flag("--json-schema")).not.toMatch(/"format"|"\$schema"/);
+  });
+
+  it("interprets output without ever checking for an MCP server", () => {
+    expect(
+      interpretReviewCliOutput(init({ mcp_servers: [] }) + result({ structured_output: NO_USEFUL_CHANGE_ENVELOPE })),
+    ).toEqual({
+      ok: true,
+      result: NO_USEFUL_CHANGE,
+    });
+  });
+
+  it("rejects a well-formed result missing the transport envelope (root must stay an object)", () => {
+    expect(interpretReviewCliOutput(init() + result({ structured_output: NO_USEFUL_CHANGE }))).toEqual({
+      ok: false,
+      failure: "malformed",
+    });
+  });
+
+  it("rejects a malformed variant even once unwrapped (kind says one thing, fields belong to another)", () => {
+    expect(
+      interpretReviewCliOutput(init() + result({ structured_output: { result: { kind: "findings", findings: [] } } })),
+    ).toEqual({ ok: false, failure: "malformed" });
+    expect(
+      interpretReviewCliOutput(
+        init() + result({ structured_output: { result: { kind: "no_useful_change", findings: [] } } }),
+      ),
+    ).toEqual({ ok: false, failure: "malformed" });
+  });
+
+  it("still classifies auth/rate-limit/malformed failures the same way as a Capture job", () => {
+    expect(
+      interpretReviewCliOutput(
+        init({ apiKeySource: "ANTHROPIC_API_KEY" }) + result({ structured_output: NO_USEFUL_CHANGE_ENVELOPE }),
+      ),
+    ).toEqual({ ok: false, failure: "not_authenticated" });
+    expect(interpretReviewCliOutput(init() + result({ result: "prose", structured_output: undefined }))).toEqual({
+      ok: false,
+      failure: "malformed",
+    });
+  });
+});
+
 describe("runProcess: no shell, bounded, killable", () => {
   const node = process.execPath;
   const opts = { cwd: dir, env: { ...(process.env as Record<string, string>) }, stdin: "", signal: never };
@@ -235,6 +318,18 @@ process.stdin.on("end", () => {
     expect(seen.input).toContain("2026");
     expect(seen.key).toBeNull();
     expect(seen.cwd).toBe(join(dir, "ai-workdir"));
+  });
+
+  it("processReview: evidence travels on stdin, every MCP server (incl. the user's own) is blocked", async () => {
+    const file = fakeCli(
+      `process.stdout.write(${JSON.stringify(init() + result({ structured_output: NO_USEFUL_CHANGE_ENVELOPE }))});`,
+    );
+    expect(await runner(file).processReview(EVIDENCE, never)).toEqual({ ok: true, result: NO_USEFUL_CHANGE });
+    const seen = JSON.parse(readFileSync(join(dir, "seen.json"), "utf8"));
+    expect(seen.args).toEqual(buildReviewClaudeArgs());
+    expect(seen.args).toContain("--strict-mcp-config");
+    expect(seen.input).toContain("action:1");
+    expect(seen.input).toContain(EVIDENCE.periodStart);
   });
 
   it("refuses (kills before any model call) when the CLI would use an API key", async () => {

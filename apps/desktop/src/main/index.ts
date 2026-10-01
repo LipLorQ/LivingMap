@@ -17,6 +17,8 @@ import {
 import { app, BrowserWindow, dialog, powerMonitor } from "electron";
 import { createCaptureProcessor } from "./ai/capture-processor";
 import { createClaudeCodeCliAiRunner } from "./ai/claude-code-cli";
+import { createReviewProcessor } from "./ai/review-processor";
+import { serializeAiRunner } from "./ai/serialize";
 import { createCalendarOrchestrator } from "./calendar";
 import { registerIpcHandlers } from "./ipc";
 import { watchStateRevision } from "./revision-watcher";
@@ -82,8 +84,7 @@ app.whenReady().then(() => {
 
   // In-app AI (ADR-0007): the AI host is started only on demand and talks to the built LivingMap MCP
   // server, run by this same Electron binary in Node mode against this app's data home.
-  const captures = createCaptureProcessor(
-    application,
+  const aiRunner = serializeAiRunner(
     createClaudeCodeCliAiRunner({
       mcpServer: {
         command: process.execPath,
@@ -92,9 +93,17 @@ app.whenReady().then(() => {
       },
       workDir: join(resolveDataHome(), "ai-workdir"),
     }),
+  );
+  const captures = createCaptureProcessor(application, aiRunner, (message) => console.error(`[living-map] ${message}`));
+  // Reviews (Stage 7): same replaceable AiRunner, a second job kind, no background service — due
+  // periods are determined and processing starts only at launch (start(), below).
+  const reviews = createReviewProcessor(
+    application,
+    aiRunner,
+    () => Intl.DateTimeFormat().resolvedOptions().timeZone,
     (message) => console.error(`[living-map] ${message}`),
   );
-  registerIpcHandlers(application, isTrustedRendererFrame, calendar, captures);
+  registerIpcHandlers(application, isTrustedRendererFrame, calendar, captures, reviews);
   // Refresh on launch (Stage 4 §7/§20): a no-op when never connected; otherwise the renderer sees
   // an up-to-date snapshot without the user having to press "Обновить" first. Fire-and-forget —
   // does not delay window creation, and the revision watcher below picks up the result.
@@ -108,10 +117,13 @@ app.whenReady().then(() => {
   createMainWindow();
   // After a crash mid-processing / pending from earlier: retried now, never by a background service.
   captures.start();
+  // Reviews (Stage 7): determines due periods and recovers interrupted rows, then starts processing.
+  reviews.start();
 
   app.on("window-all-closed", () => app.quit());
   app.on("will-quit", () => {
     captures.stop();
+    reviews.stop();
     stopWatching();
     pauseWorkOnQuit();
     handle.close();

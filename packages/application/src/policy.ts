@@ -52,6 +52,19 @@ export const COMMAND_POLICY = {
   "memory.save": ["mcp-ai", "system"],
   // Forgetting is the user's decision only: the AI can add to memory, never erase it.
   "memory.forget": ["user-ui", "system"],
+  // Reviews (Stage 7): scheduling/processing is the desktop's own background work (system only —
+  // mirrors capture.process); mcp-ai has no policy entry for ANY review/pattern/rule command below,
+  // so it structurally cannot process a review, resolve a finding, confirm a Pattern or touch a rule.
+  "review.schedule": ["system"],
+  "review.process": ["system"],
+  "review.retry": ["user-ui", "system"],
+  "reviewFinding.accept": ["user-ui", "system"],
+  "reviewFinding.correct": ["user-ui", "system"],
+  "reviewFinding.reject": ["user-ui", "system"],
+  // A Pattern candidate becomes a rule ONLY through explicit user confirmation (this stage's prompt §17).
+  "pattern.confirm": ["user-ui", "system"],
+  "pattern.reject": ["user-ui", "system"],
+  "planningRule.deactivate": ["user-ui", "system"],
 } as const satisfies Record<string, readonly Actor[]>;
 
 export type CommandName = keyof typeof COMMAND_POLICY;

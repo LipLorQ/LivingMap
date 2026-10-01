@@ -72,6 +72,28 @@ export {
 } from "./good-life-condition";
 export type { CreateIntentionInput, IntentionDto, UpdateIntentionInput } from "./intention";
 export { CreateIntentionInputSchema, IntentionDtoSchema, UpdateIntentionInputSchema } from "./intention";
+export type {
+  ConfirmPatternInput,
+  DeactivatePlanningRuleInput,
+  ListPatternCandidatesInput,
+  ListPlanningRulesInput,
+  PatternDto,
+  PatternStatus,
+  PlanningRuleDto,
+  PlanningRuleStatus,
+  RejectPatternInput,
+} from "./pattern";
+export {
+  ConfirmPatternInputSchema,
+  DeactivatePlanningRuleInputSchema,
+  ListPatternCandidatesInputSchema,
+  ListPlanningRulesInputSchema,
+  PatternDtoSchema,
+  PatternStatusSchema,
+  PlanningRuleDtoSchema,
+  PlanningRuleStatusSchema,
+  RejectPatternInputSchema,
+} from "./pattern";
 export type { OrderedActionPlanDto, ReorderExistingActionsInput } from "./plan";
 export { OrderedActionPlanDtoSchema, RationaleSchema, ReorderExistingActionsInputSchema } from "./plan";
 export type {
@@ -95,6 +117,42 @@ export {
   RoutePayloadSchema,
   RoutePreviewDtoSchema,
 } from "./proposal";
+export type {
+  AcceptReviewFindingInput,
+  CorrectReviewFindingInput,
+  GetReviewInput,
+  ListReviewsInput,
+  RejectReviewFindingInput,
+  RetryReviewInput,
+  ReviewAiResult,
+  ReviewAiTransport,
+  ReviewDto,
+  ReviewFindingDraft,
+  ReviewFindingDto,
+  ReviewFindingStatus,
+  ReviewInboxDto,
+  ReviewStatus,
+  ReviewType,
+  ReviewWithFindingsDto,
+} from "./review";
+export {
+  AcceptReviewFindingInputSchema,
+  CorrectReviewFindingInputSchema,
+  GetReviewInputSchema,
+  ListReviewsInputSchema,
+  RejectReviewFindingInputSchema,
+  RetryReviewInputSchema,
+  ReviewAiResultSchema,
+  ReviewAiTransportSchema,
+  ReviewDtoSchema,
+  ReviewFindingDraftSchema,
+  ReviewFindingDtoSchema,
+  ReviewFindingStatusSchema,
+  ReviewInboxDtoSchema,
+  ReviewStatusSchema,
+  ReviewTypeSchema,
+  ReviewWithFindingsDtoSchema,
+} from "./review";
 export type { CreateSeasonInput, SeasonDto, UpdateSeasonFocusInput } from "./season";
 export { CreateSeasonInputSchema, SeasonDtoSchema, UpdateSeasonFocusInputSchema } from "./season";
 export type { AddStageInput, EditStageInput, ReorderStagesInput, SetCurrentStageInput, StageDto } from "./stage";

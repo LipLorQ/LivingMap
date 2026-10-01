@@ -1,5 +1,6 @@
 // Kept free of runtime dependencies: the sandboxed preload imports this file.
 import type {
+  AcceptReviewFindingInput,
   ActionDto,
   AddActionInput,
   AddGoodLifeConditionInput,
@@ -9,21 +10,32 @@ import type {
   CaptureDto,
   ChangeLogEntryDto,
   CompleteActionInput,
+  ConfirmPatternInput,
   ConnectCalendarInput,
+  CorrectReviewFindingInput,
   CreateIntentionInput,
   CreateSeasonInput,
   CurrentViewDto,
+  DeactivatePlanningRuleInput,
   EditActionInput,
   EditGoodLifeConditionInput,
   EditStageInput,
   ExecutionDto,
   ForgetMemoryInput,
+  GetReviewInput,
   GoodLifeConditionDto,
   IntentionDto,
   ListCapturesInput,
   ListChangeHistoryInput,
+  ListPatternCandidatesInput,
+  ListPlanningRulesInput,
+  ListReviewsInput,
   MemoryDto,
+  PatternDto,
+  PlanningRuleDto,
   ProposalDto,
+  RejectPatternInput,
+  RejectReviewFindingInput,
   RemoveGoodLifeConditionInput,
   ReopenActionInput,
   ReorderActionsInput,
@@ -32,6 +44,10 @@ import type {
   ResolveProposalInput,
   Result,
   RetryCaptureInput,
+  RetryReviewInput,
+  ReviewDto,
+  ReviewFindingDto,
+  ReviewWithFindingsDto,
   SearchMemoryInput,
   SeasonDto,
   SetCurrentStageInput,
@@ -82,6 +98,17 @@ export const IPC_CHANNELS = {
   retryCapture: "lm:command:retryCapture",
   searchMemory: "lm:query:searchMemory",
   forgetMemory: "lm:command:forgetMemory",
+  listReviews: "lm:query:listReviews",
+  getReview: "lm:query:getReview",
+  retryReview: "lm:command:retryReview",
+  acceptReviewFinding: "lm:command:acceptReviewFinding",
+  correctReviewFinding: "lm:command:correctReviewFinding",
+  rejectReviewFinding: "lm:command:rejectReviewFinding",
+  listPatternCandidates: "lm:query:listPatternCandidates",
+  confirmPattern: "lm:command:confirmPattern",
+  rejectPattern: "lm:command:rejectPattern",
+  listPlanningRules: "lm:query:listPlanningRules",
+  deactivatePlanningRule: "lm:command:deactivatePlanningRule",
   stateChanged: "lm:event:stateChanged",
 } as const;
 
@@ -92,6 +119,11 @@ export type LivingMapApi = {
     listChangeHistory(input: ListChangeHistoryInput): Promise<Result<ChangeLogEntryDto[]>>;
     listCaptures(input: ListCapturesInput): Promise<Result<CaptureDto[]>>;
     searchMemory(input: SearchMemoryInput): Promise<Result<MemoryDto[]>>;
+    /** Reviews (Stage 7), newest first. */
+    listReviews(input: ListReviewsInput): Promise<Result<ReviewDto[]>>;
+    getReview(input: GetReviewInput): Promise<Result<ReviewWithFindingsDto>>;
+    listPatternCandidates(input: ListPatternCandidatesInput): Promise<Result<PatternDto[]>>;
+    listPlanningRules(input: ListPlanningRulesInput): Promise<Result<PlanningRuleDto[]>>;
   };
   commands: {
     createSeason(input: CreateSeasonInput): Promise<Result<SeasonDto>>;
@@ -128,6 +160,19 @@ export type LivingMapApi = {
     retryCapture(input: RetryCaptureInput): Promise<Result<CaptureDto>>;
     /** The user forgets a memory; the Capture it came from is kept as typed. */
     forgetMemory(input: ForgetMemoryInput): Promise<Result<null>>;
+    /** «Повторить» a failed Review. */
+    retryReview(input: RetryReviewInput): Promise<Result<ReviewDto>>;
+    /** «Всё верно». */
+    acceptReviewFinding(input: AcceptReviewFindingInput): Promise<Result<ReviewFindingDto>>;
+    /** The user's correction becomes the accepted learning; the AI's draft is kept. */
+    correctReviewFinding(input: CorrectReviewFindingInput): Promise<Result<ReviewFindingDto>>;
+    /** «Игнорировать»: never becomes Pattern evidence. */
+    rejectReviewFinding(input: RejectReviewFindingInput): Promise<Result<ReviewFindingDto>>;
+    /** «Сделать правилом»: confirms the candidate and activates its PlanningRule atomically. */
+    confirmPattern(input: ConfirmPatternInput): Promise<Result<PatternDto>>;
+    /** «Не считать правилом». */
+    rejectPattern(input: RejectPatternInput): Promise<Result<PatternDto>>;
+    deactivatePlanningRule(input: DeactivatePlanningRuleInput): Promise<Result<PlanningRuleDto>>;
   };
   events: {
     /** Returns an unsubscribe function. */

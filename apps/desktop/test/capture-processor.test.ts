@@ -64,6 +64,7 @@ function fakeRunner(outcomes: AiRunOutcome[] | ((input: AiRunInput) => Promise<A
       if (typeof outcomes === "function") return outcomes(input);
       return outcomes.shift() ?? ANSWER;
     },
+    processReview: async () => ({ ok: false, failure: "failed" }),
   };
   return { runner, calls };
 }
@@ -154,6 +155,7 @@ describe("capture processor (single flight, save first)", () => {
   it("a throwing runner cannot leave a Capture stuck in processing", async () => {
     const p = createCaptureProcessor(app, {
       processCapture: () => Promise.reject(new Error("boom")),
+      processReview: async () => ({ ok: false, failure: "failed" }),
     });
     const a = submit("a");
     p.kick();
@@ -171,6 +173,7 @@ describe("capture processor (single flight, save first)", () => {
             resolve({ ok: false, failure: "failed" });
           }),
         ),
+      processReview: async () => ({ ok: false, failure: "failed" }),
     });
     const a = submit("мысль перед сбоем");
     first.kick();
@@ -245,6 +248,7 @@ describe("Capture → Proposal linkage (idempotent retry, Gate B)", () => {
           signal.addEventListener("abort", () => resolve({ ok: false, failure: "failed" })),
         );
       },
+      processReview: async () => ({ ok: false, failure: "failed" }),
     });
     first.kick();
     await vi.waitFor(() => expect(proposalId).not.toBe(""));
@@ -297,6 +301,7 @@ describe("Capture → Proposal linkage (idempotent retry, Gate B)", () => {
         proposalId = unwrap(proposeFor(input.captureId, intentionId)).id;
         return { ok: false, failure: "mcp_failed" }; // the Gate B contradiction
       },
+      processReview: async () => ({ ok: false, failure: "failed" }),
     });
     p.kick();
     await p.idle();

@@ -135,6 +135,39 @@ describe("migration from the completed Stage 2 schema", () => {
   });
 });
 
+describe("migration 0016: memory source_capture_verified backfill (M-A)", () => {
+  it("backfills existing Capture-linked Memory rows as verified, not silently dropping real H2/H-A provenance", () => {
+    // A real pre-0016 database: schema through 0015, holding a Memory the (only-ever-existing) trusted
+    // Capture-processing job linked to its Capture, before this distinction existed.
+    const legacy = new Database(file);
+    legacy.pragma("journal_mode = WAL");
+    applyMigrations(legacy, MIGRATIONS.slice(0, 16));
+    legacy.exec(`
+      INSERT INTO captures (id, raw_text, source, created_at, state, attempts, result, updated_at)
+      VALUES ('00000000-0000-4000-8000-000000000001', 'Приём у врача', 'capture', '2026-09-27T10:00:00.000Z', 'processed', 1, NULL, '2026-09-27T10:00:00.000Z');
+      INSERT INTO memories (id, type, text, source_capture_id, linked_entity_ids, created_by, created_at)
+      VALUES ('00000000-0000-4000-8000-000000000002', 'fact', 'Врач', '00000000-0000-4000-8000-000000000001', '[]', 'mcp-ai', '2026-09-27T10:00:00.000Z');
+      INSERT INTO memories (id, type, text, source_capture_id, linked_entity_ids, created_by, created_at)
+      VALUES ('00000000-0000-4000-8000-000000000003', 'idea', 'Независимая мысль', NULL, '[]', 'mcp-ai', '2026-09-27T10:00:00.000Z');
+    `);
+    legacy.close();
+
+    const h = track(openDesktopDatabase(file));
+    expect(h.sqlite.pragma("user_version", { simple: true })).toBe(EXPECTED_SCHEMA_VERSION);
+    const rows = h.sqlite
+      .prepare("select id, source_capture_id, source_capture_verified from memories order by id")
+      .all() as { id: string; source_capture_id: string | null; source_capture_verified: number }[];
+    expect(rows).toEqual([
+      {
+        id: "00000000-0000-4000-8000-000000000002",
+        source_capture_id: "00000000-0000-4000-8000-000000000001",
+        source_capture_verified: 1,
+      },
+      { id: "00000000-0000-4000-8000-000000000003", source_capture_id: null, source_capture_verified: 0 },
+    ]);
+  });
+});
+
 describe("capability classes", () => {
   it("mcp-ai may only create proposals and run the whitelisted safe writes (reorder, memory)", () => {
     const aiCommands = Object.entries(COMMAND_POLICY)
@@ -161,7 +194,7 @@ describe("capability classes", () => {
         title: "x",
         desiredResult: "y",
       }),
-      mcp.commands.updateSeasonFocus(ai(), { expectedVersion: 1, focus: "x" }),
+      mcp.commands.updateSeasonFocus(ai(), { expectedVersion: 1, focus: "x", startsNewSeason: false }),
       mcp.commands.addGoodLifeCondition(ai(), { text: "x" }),
       mcp.commands.completeAction(ai(), { id: seed.open.id, expectedVersion: seed.open.version }),
     ];

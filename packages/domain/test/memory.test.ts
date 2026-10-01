@@ -6,6 +6,7 @@ const memory = (text: string, createdAt: string, id = createdAt): Memory => ({
   type: "preference",
   text,
   sourceCaptureId: null,
+  sourceCaptureVerified: false,
   linkedEntityIds: [],
   createdBy: "mcp-ai",
   createdAt,
@@ -33,11 +34,40 @@ describe("Memory", () => {
       type: "fact",
       text: "  факт  ",
       sourceCaptureId: null,
+      sourceCaptureVerified: false,
       linkedEntityIds: ["a", "a", "b"],
       createdBy: "mcp-ai",
       now: "t",
     });
     expect(r).toMatchObject({ ok: true, value: { text: "факт", linkedEntityIds: ["a", "b"] } });
+  });
+
+  it("sourceCaptureVerified can never be true without a sourceCaptureId (M-A: no provenance without a link)", () => {
+    const r = createMemory({
+      id: "m",
+      type: "fact",
+      text: "x",
+      sourceCaptureId: null,
+      sourceCaptureVerified: true,
+      linkedEntityIds: [],
+      createdBy: "mcp-ai",
+      now: "t",
+    });
+    expect(r).toMatchObject({ ok: true, value: { sourceCaptureId: null, sourceCaptureVerified: false } });
+  });
+
+  it("sourceCaptureVerified is carried through as given when a sourceCaptureId is present", () => {
+    const r = createMemory({
+      id: "m",
+      type: "fact",
+      text: "x",
+      sourceCaptureId: "c1",
+      sourceCaptureVerified: true,
+      linkedEntityIds: [],
+      createdBy: "mcp-ai",
+      now: "t",
+    });
+    expect(r).toMatchObject({ ok: true, value: { sourceCaptureId: "c1", sourceCaptureVerified: true } });
   });
 
   it("resurfaces an old constraint for a later, differently worded request (Russian, case-insensitive)", () => {

@@ -15,8 +15,16 @@ import type {
   MemoryRepository,
   OrderedActionPlanReader,
   OrderedActionPlanRepository,
+  PatternReader,
+  PatternRepository,
+  PlanningRuleReader,
+  PlanningRuleRepository,
   ProposalReader,
   ProposalRepository,
+  ReviewFindingReader,
+  ReviewFindingRepository,
+  ReviewReader,
+  ReviewRepository,
   SeasonReader,
   SeasonRepository,
   SettingsReader,
@@ -29,23 +37,33 @@ import type {
 } from "@living-map/application";
 import { SchemaConflictError } from "@living-map/application";
 import type { CalendarSnapshotDto } from "@living-map/contracts";
-import type {
-  Action,
-  ActionStatus,
-  Capture,
-  CaptureState,
-  GoodLifeCondition,
-  Instant,
-  Intention,
-  Memory,
-  MemoryType,
-  Proposal,
-  ProposalKind,
-  ProposalStatus,
-  Season,
-  Stage,
+import {
+  type Action,
+  type ActionStatus,
+  acceptedFindingText,
+  type Capture,
+  type CaptureState,
+  type GoodLifeCondition,
+  type Instant,
+  type Intention,
+  type Memory,
+  type MemoryType,
+  type Pattern,
+  type PatternStatus,
+  type PlanningRule,
+  type PlanningRuleStatus,
+  type Proposal,
+  type ProposalKind,
+  type ProposalStatus,
+  type Review,
+  type ReviewFinding,
+  type ReviewFindingStatus,
+  type ReviewStatus,
+  type ReviewType,
+  type Season,
+  type Stage,
 } from "@living-map/domain";
-import { and, asc, desc, eq, gte, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 import type { SQLiteUpdateSetSource } from "drizzle-orm/sqlite-core";
 import type { Db, SqliteHandle } from "./connection";
 import { EXPECTED_SCHEMA_VERSION } from "./migrate";
@@ -59,7 +77,11 @@ import {
   memories,
   meta,
   orderedActionPlans,
+  patterns,
+  planningRules,
   proposals,
+  reviewFindings,
+  reviews,
   season,
   settings,
   stages,
@@ -241,6 +263,13 @@ function actionReader(q: Tx): ActionReader {
             .orderBy(asc(actions.position))
             .all()
             .map(rowToAction),
+    listCompletedBetween: (from, to) =>
+      q
+        .select()
+        .from(actions)
+        .where(and(gte(actions.completedAt, from), lt(actions.completedAt, to)))
+        .all()
+        .map(rowToAction),
   };
 }
 
@@ -328,6 +357,13 @@ function proposalReader(q: Tx): ProposalReader {
         .from(proposals)
         .where(eq(proposals.status, "pending"))
         .orderBy(asc(proposals.createdAt))
+        .all()
+        .map(rowToProposal),
+    listResolvedBetween: (from, to) =>
+      q
+        .select()
+        .from(proposals)
+        .where(and(gte(proposals.resolvedAt, from), lt(proposals.resolvedAt, to)))
         .all()
         .map(rowToProposal),
   };
@@ -469,6 +505,17 @@ function captureReader(q: Tx): CaptureReader {
         .get();
       return row ? rowToCapture(row) : undefined;
     },
+    listCreatedBetween: (from, to) =>
+      q
+        .select()
+        .from(captures)
+        .where(and(gte(captures.createdAt, from), lt(captures.createdAt, to)))
+        .all()
+        .map(rowToCapture),
+    findByProposalId: (proposalId) => {
+      const row = q.select().from(captures).where(eq(captures.proposalId, proposalId)).get();
+      return row ? rowToCapture(row) : undefined;
+    },
   };
 }
 
@@ -540,6 +587,13 @@ function memoryReader(q: Tx): MemoryReader {
             .orderBy(asc(memories.createdAt))
             .all()
             .map(rowToMemory),
+    listCreatedBetween: (from, to) =>
+      q
+        .select()
+        .from(memories)
+        .where(and(gte(memories.createdAt, from), lt(memories.createdAt, to)))
+        .all()
+        .map(rowToMemory),
   };
 }
 
@@ -552,6 +606,244 @@ function memoryRepository(q: Tx): MemoryRepository {
         .values({ ...m, linkedEntityIds: [...m.linkedEntityIds] })
         .run(),
     remove: (id) => q.delete(memories).where(eq(memories.id, id)).run().changes > 0,
+    verifySourceCapture: (id) =>
+      void q.update(memories).set({ sourceCaptureVerified: true }).where(eq(memories.id, id)).run(),
+  };
+}
+
+type ReviewRow = typeof reviews.$inferSelect;
+const rowToReview = (row: ReviewRow): Review => ({
+  ...row,
+  type: row.type as ReviewType,
+  status: row.status as ReviewStatus,
+});
+
+function reviewReader(q: Tx): ReviewReader {
+  return {
+    findById: (id) => {
+      const row = q.select().from(reviews).where(eq(reviews.id, id)).get();
+      return row ? rowToReview(row) : undefined;
+    },
+    findLatestByType: (type) => {
+      const row = q
+        .select()
+        .from(reviews)
+        .where(eq(reviews.type, type))
+        .orderBy(desc(reviews.periodEnd))
+        .limit(1)
+        .get();
+      return row ? rowToReview(row) : undefined;
+    },
+    listRecent: (limit) =>
+      q.select().from(reviews).orderBy(desc(reviews.createdAt), desc(sql`rowid`)).limit(limit).all().map(rowToReview),
+    findNextPending: () => {
+      const row = q
+        .select()
+        .from(reviews)
+        .where(eq(reviews.status, "needs_ai"))
+        .orderBy(asc(reviews.createdAt), asc(sql`rowid`))
+        .get();
+      return row ? rowToReview(row) : undefined;
+    },
+    existsForPeriod: (type, periodStart, periodEnd) =>
+      q
+        .select({ id: reviews.id })
+        .from(reviews)
+        .where(and(eq(reviews.type, type), eq(reviews.periodStart, periodStart), eq(reviews.periodEnd, periodEnd)))
+        .get() !== undefined,
+  };
+}
+
+function reviewRepository(q: Tx): ReviewRepository {
+  // Every transition names the state it may leave, mirroring captureRepository's `move` (a stale caller changes nothing).
+  const move = (id: string, from: ReviewStatus, set: SQLiteUpdateSetSource<typeof reviews>) =>
+    q
+      .update(reviews)
+      .set(set)
+      .where(and(eq(reviews.id, id), eq(reviews.status, from)))
+      .run().changes === 1;
+  return {
+    ...reviewReader(q),
+    insert: (r) => void q.insert(reviews).values(r).run(),
+    claim: (id, now) =>
+      move(id, "needs_ai", { status: "processing", attempts: sql`${reviews.attempts} + 1`, updatedAt: now }),
+    finish: (id, outcome, now) =>
+      move(
+        id,
+        "processing",
+        "status" in outcome
+          ? { status: outcome.status, lastError: null, updatedAt: now }
+          : { status: "failed", lastError: outcome.lastError, updatedAt: now },
+      ),
+    requeue: (id, now) => move(id, "failed", { status: "needs_ai", updatedAt: now }),
+    recover: (maxAttempts, now) =>
+      q
+        .update(reviews)
+        .set({ status: "failed", lastError: "failed", updatedAt: now })
+        .where(and(eq(reviews.status, "processing"), sql`${reviews.attempts} >= ${maxAttempts}`))
+        .run().changes +
+      q
+        .update(reviews)
+        .set({ status: "needs_ai", updatedAt: now })
+        .where(
+          or(
+            eq(reviews.status, "processing"),
+            and(eq(reviews.status, "failed"), sql`${reviews.attempts} < ${maxAttempts}`),
+          ),
+        )
+        .run().changes,
+  };
+}
+
+type ReviewFindingRow = typeof reviewFindings.$inferSelect;
+const rowToReviewFinding = (row: ReviewFindingRow): ReviewFinding => ({
+  ...row,
+  status: row.status as ReviewFindingStatus,
+});
+
+function reviewFindingReader(q: Tx): ReviewFindingReader {
+  return {
+    findById: (id) => {
+      const row = q.select().from(reviewFindings).where(eq(reviewFindings.id, id)).get();
+      return row ? rowToReviewFinding(row) : undefined;
+    },
+    listByReview: (reviewId) =>
+      q
+        .select()
+        .from(reviewFindings)
+        .where(eq(reviewFindings.reviewId, reviewId))
+        .orderBy(asc(reviewFindings.createdAt))
+        .all()
+        .map(rowToReviewFinding),
+    listAcceptedByPatternKey: (key) =>
+      q
+        .select()
+        .from(reviewFindings)
+        .where(and(eq(reviewFindings.patternKey, key), inArray(reviewFindings.status, ["accepted", "corrected"])))
+        .all()
+        .map(rowToReviewFinding),
+    listDistinctPatternThemes: (limit) => {
+      // ponytail: dedupe-by-key in JS on a query already scoped to accepted/corrected+non-null
+      // patternKey — fine for one person's Pattern themes, no window function needed.
+      const seen = new Map<string, string>();
+      for (const row of q
+        .select()
+        .from(reviewFindings)
+        .where(and(isNotNull(reviewFindings.patternKey), inArray(reviewFindings.status, ["accepted", "corrected"])))
+        .orderBy(desc(reviewFindings.createdAt))
+        .all()
+        .map(rowToReviewFinding)) {
+        const key = row.patternKey as string;
+        if (!seen.has(key)) seen.set(key, acceptedFindingText(row) ?? row.text);
+        if (seen.size >= limit) break;
+      }
+      return [...seen.entries()].map(([patternKey, text]) => ({ patternKey, text }));
+    },
+  };
+}
+
+function reviewFindingRepository(q: Tx): ReviewFindingRepository {
+  return {
+    ...reviewFindingReader(q),
+    insert: (f) =>
+      void q
+        .insert(reviewFindings)
+        .values({ ...f, evidenceRefs: [...f.evidenceRefs], evidenceFactIds: [...f.evidenceFactIds] })
+        .run(),
+    resolveIfProposed: (f) =>
+      q
+        .update(reviewFindings)
+        .set({ status: f.status, correctedText: f.correctedText, patternKey: f.patternKey, updatedAt: f.updatedAt })
+        .where(and(eq(reviewFindings.id, f.id), eq(reviewFindings.status, "proposed")))
+        .run().changes === 1,
+  };
+}
+
+type PatternRow = typeof patterns.$inferSelect;
+const rowToPattern = (row: PatternRow): Pattern => ({ ...row, status: row.status as PatternStatus });
+
+function patternReader(q: Tx): PatternReader {
+  return {
+    findById: (id) => {
+      const row = q.select().from(patterns).where(eq(patterns.id, id)).get();
+      return row ? rowToPattern(row) : undefined;
+    },
+    listCandidates: (limit) =>
+      q
+        .select()
+        .from(patterns)
+        .where(eq(patterns.status, "candidate"))
+        .orderBy(asc(patterns.createdAt))
+        .limit(limit)
+        .all()
+        .map(rowToPattern),
+    findByKey: (patternKey) => {
+      const rows = q.select().from(patterns).where(eq(patterns.patternKey, patternKey)).all().map(rowToPattern);
+      return (
+        rows.find((p) => p.status !== "rejected") ?? rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
+      );
+    },
+  };
+}
+
+function patternRepository(q: Tx): PatternRepository {
+  return {
+    ...patternReader(q),
+    insert: (p) =>
+      void q
+        .insert(patterns)
+        .values({ ...p, evidenceFindingIds: [...p.evidenceFindingIds] })
+        .run(),
+    resolveIfCandidate: (p) =>
+      q
+        .update(patterns)
+        .set({ status: p.status, resolvedAt: p.resolvedAt, resolvedBy: p.resolvedBy })
+        .where(and(eq(patterns.id, p.id), eq(patterns.status, "candidate")))
+        .run().changes === 1,
+    growIfCandidate: (p) =>
+      q
+        .update(patterns)
+        .set({ evidenceFindingIds: [...p.evidenceFindingIds], updatedAt: p.updatedAt })
+        .where(and(eq(patterns.id, p.id), eq(patterns.status, "candidate")))
+        .run().changes === 1,
+  };
+}
+
+type PlanningRuleRow = typeof planningRules.$inferSelect;
+const rowToPlanningRule = (row: PlanningRuleRow): PlanningRule => ({
+  ...row,
+  status: row.status as PlanningRuleStatus,
+});
+
+function planningRuleReader(q: Tx): PlanningRuleReader {
+  return {
+    findById: (id) => {
+      const row = q.select().from(planningRules).where(eq(planningRules.id, id)).get();
+      return row ? rowToPlanningRule(row) : undefined;
+    },
+    listActive: () =>
+      q
+        .select()
+        .from(planningRules)
+        .where(eq(planningRules.status, "active"))
+        .orderBy(asc(planningRules.createdAt))
+        .all()
+        .map(rowToPlanningRule),
+    listAll: (limit) =>
+      q.select().from(planningRules).orderBy(desc(planningRules.createdAt)).limit(limit).all().map(rowToPlanningRule),
+  };
+}
+
+function planningRuleRepository(q: Tx): PlanningRuleRepository {
+  return {
+    ...planningRuleReader(q),
+    insert: (r) => void q.insert(planningRules).values(r).run(),
+    deactivateIfActive: (r) =>
+      q
+        .update(planningRules)
+        .set({ status: r.status, deactivatedAt: r.deactivatedAt })
+        .where(and(eq(planningRules.id, r.id), eq(planningRules.status, "active")))
+        .run().changes === 1,
   };
 }
 
@@ -559,7 +851,28 @@ function memoryRepository(q: Tx): MemoryRepository {
  * Bookkeeping of AI processing (claim / failure / launch recovery) bumps the revision so the UI
  * refreshes, but is not a "meaningful change" (ARCHITECTURE Â§20): kept out of history and AI context.
  */
-const UNLISTED_COMMANDS = ["calendar.save", "capture.claim", "capture.failed", "capture.recover"];
+const UNLISTED_COMMANDS = [
+  "calendar.save",
+  "capture.claim",
+  "capture.failed",
+  "capture.recover",
+  // M-A: upgrading an existing Memory's provenance from unverified to verified (a trusted Capture job
+  // catching up to an earlier untethered-session claim) is bookkeeping on an already-saved Memory, not
+  // a second "AI saved a memory" event.
+  "memory.verify",
+  "review.claim",
+  "review.failed",
+  "review.recover",
+  // A launch catch-up can schedule and finish up to 101 due periods in one run (60 daily/26
+  // weekly/10 seasonal/5 yearly) — routine scheduler bookkeeping, not a "meaningful change"
+  // (ARCHITECTURE §20), so excluded here too, same as review.claim/failed/recover above, or it would
+  // flood both the user-facing history feed and MCP's `recentHistory` planning context. Unlike these,
+  // `review.retry` is the user's own deliberate «Повторить» click (mirrors `capture.retry`, also not
+  // unlisted) and stays visible.
+  "review.due",
+  "review.processed",
+  "review.findingCreated",
+];
 
 function changeLogReader(q: Tx): ChangeLogReader {
   return {
@@ -576,6 +889,23 @@ function changeLogReader(q: Tx): ChangeLogReader {
         .orderBy(desc(changeLog.stateRevision), desc(sql`rowid`))
         .limit(limit)
         .all(),
+    // Unfiltered (unlike listRecent above) — Review evidence needs the full picture, oldest first.
+    listBetween: (from, to) =>
+      q
+        .select()
+        .from(changeLog)
+        .where(and(gte(changeLog.timestamp, from), lt(changeLog.timestamp, to)))
+        .orderBy(asc(changeLog.stateRevision), asc(sql`rowid`))
+        .all(),
+    listByCommandTypes: (commandTypes) =>
+      commandTypes.length === 0
+        ? []
+        : q
+            .select()
+            .from(changeLog)
+            .where(inArray(changeLog.commandType, commandTypes as string[]))
+            .orderBy(asc(changeLog.stateRevision), asc(sql`rowid`))
+            .all(),
   };
 }
 
@@ -611,6 +941,10 @@ export function createSqliteStore(handle: SqliteHandle, ids: IdGenerator): Store
             settings: settingsReader(tx),
             captures: captureReader(tx),
             memories: memoryReader(tx),
+            reviews: reviewReader(tx),
+            reviewFindings: reviewFindingReader(tx),
+            patterns: patternReader(tx),
+            planningRules: planningRuleReader(tx),
             stateRevision: () => readRevision(tx),
           }),
         { behavior: "deferred" },
@@ -644,6 +978,11 @@ export function createSqliteStore(handle: SqliteHandle, ids: IdGenerator): Store
             settings: settingsRepository(tx),
             captures: captureRepository(tx),
             memories: memoryRepository(tx),
+            reviews: reviewRepository(tx),
+            reviewFindings: reviewFindingRepository(tx),
+            patterns: patternRepository(tx),
+            planningRules: planningRuleRepository(tx),
+            changeLog: changeLogReader(tx),
             stateRevision: () => startRevision,
             recordChange: (change) => {
               if (revision === undefined) {

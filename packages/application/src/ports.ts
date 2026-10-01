@@ -1,4 +1,4 @@
-import type { AiFailure, CalendarSnapshotDto, CaptureAiResult } from "@living-map/contracts";
+import type { AiFailure, CalendarSnapshotDto, CaptureAiResult, ReviewAiResult } from "@living-map/contracts";
 import type {
   Action,
   Capture,
@@ -9,7 +9,12 @@ import type {
   Intention,
   Memory,
   OrderedActionPlan,
+  Pattern,
+  PlanningRule,
   Proposal,
+  Review,
+  ReviewFinding,
+  ReviewType,
   Season,
   Stage,
   Version,
@@ -81,6 +86,8 @@ export interface ActionReader {
   listByStage(stageId: EntityId): Action[];
   /** Batched form of `listByStage` for views spanning every Stage of an Intention (avoids N+1). */
   listByStages(stageIds: readonly EntityId[]): Action[];
+  /** Completed in [from, to) — Review evidence (Stage 7 §5/§6). */
+  listCompletedBetween(from: Instant, to: Instant): Action[];
 }
 
 export interface ActionRepository extends ActionReader {
@@ -137,6 +144,8 @@ export interface SettingsRepository extends SettingsReader {
 export interface ProposalReader {
   findById(id: EntityId): Proposal | undefined;
   listPending(): Proposal[];
+  /** Resolved (accepted/rejected/stale) in [from, to) — Review evidence (Stage 7 §5). */
+  listResolvedBetween(from: Instant, to: Instant): Proposal[];
 }
 
 export interface ProposalRepository extends ProposalReader {
@@ -151,6 +160,10 @@ export interface CaptureReader {
   listRecent(limit: number, state?: CaptureState): Capture[];
   /** The oldest `pending` Capture, if any. */
   findNextPending(): Capture | undefined;
+  /** Created in [from, to) — Review evidence (Stage 7 §5). */
+  listCreatedBetween(from: Instant, to: Instant): Capture[];
+  /** The Capture this Proposal was created from, if any — Review evidence provenance (Stage 7 H2 fix). */
+  findByProposalId(proposalId: EntityId): Capture | undefined;
 }
 
 /** State changes are conditional single-row updates: a stale caller changes nothing and gets false. */
@@ -171,12 +184,103 @@ export interface CaptureRepository extends CaptureReader {
 export interface MemoryReader {
   list(): Memory[];
   listBySourceCaptures(captureIds: readonly EntityId[]): Memory[];
+  /** Created in [from, to) — Review evidence (Stage 7 §5). */
+  listCreatedBetween(from: Instant, to: Instant): Memory[];
 }
 
 export interface MemoryRepository extends MemoryReader {
   insert(memory: Memory): void;
   /** Hard delete; false when no such memory. */
   remove(id: EntityId): boolean;
+  /**
+   * M-A: upgrades an existing Memory's `sourceCaptureVerified` to true. The only caller is `saveMemory`
+   * when its own trusted `ctx.captureId` hits the "one memory per type per Capture" dedup no-op against
+   * a Memory an earlier, untethered call already created for the same Capture+type — without this, the
+   * trusted job's own vouching would be silently discarded and the pair would stay disjoint forever.
+   */
+  verifySourceCapture(id: EntityId): void;
+}
+
+/**
+ * One closed period being learned from (Stage 7). Transitions mirror {@link CaptureRepository}:
+ * every one names the state it may leave, so a stale caller changes nothing.
+ */
+export interface ReviewReader {
+  findById(id: EntityId): Review | undefined;
+  /** The most recently created Review of this type, if any — the scheduler's catch-up cursor. */
+  findLatestByType(type: ReviewType): Review | undefined;
+  /** Newest first. */
+  listRecent(limit: number): Review[];
+  /** The oldest `needs_ai` Review, if any. */
+  findNextPending(): Review | undefined;
+  existsForPeriod(type: ReviewType, periodStart: Instant, periodEnd: Instant): boolean;
+}
+
+export interface ReviewRepository extends ReviewReader {
+  insert(review: Review): void;
+  /** needs_ai → processing, attempts + 1. */
+  claim(id: EntityId, now: Instant): boolean;
+  /** processing → ready | no_useful_change (outcome) | failed (with lastError). */
+  finish(
+    id: EntityId,
+    outcome: { status: "ready" | "no_useful_change" } | { lastError: string },
+    now: Instant,
+  ): boolean;
+  /** failed → needs_ai. */
+  requeue(id: EntityId, now: Instant): boolean;
+  /** Launch recovery: processing → needs_ai, and failed with attempts < `maxAttempts` → needs_ai. Returns rows changed. */
+  recover(maxAttempts: number, now: Instant): number;
+}
+
+export interface ReviewFindingReader {
+  findById(id: EntityId): ReviewFinding | undefined;
+  listByReview(reviewId: EntityId): ReviewFinding[];
+  /** accepted/corrected findings sharing `patternKey`, across every Review — Pattern candidate detection. */
+  listAcceptedByPatternKey(patternKey: string): ReviewFinding[];
+  /**
+   * One example (newest) accepted/corrected finding per distinct non-null `patternKey`, newest keys
+   * first. A Review job is stateless and gets no tool access (§21), so this is how it learns which
+   * theme slugs already exist to reuse — without it, two independent runs would almost never invent
+   * the exact same slug and recurrence would practically never surface.
+   */
+  listDistinctPatternThemes(limit: number): { patternKey: string; text: string }[];
+}
+
+export interface ReviewFindingRepository extends ReviewFindingReader {
+  insert(finding: ReviewFinding): void;
+  /** Persists only if the stored row is still `proposed`; false otherwise (mirrors `resolveIfPending`). */
+  resolveIfProposed(finding: ReviewFinding): boolean;
+}
+
+export interface PatternReader {
+  findById(id: EntityId): Pattern | undefined;
+  listCandidates(limit: number): Pattern[];
+  /**
+   * The most relevant Pattern for this theme, if any: the one non-rejected (candidate/confirmed) row
+   * when one exists — at most one is ever created per key — otherwise the newest rejected one. Drives
+   * "grow the existing candidate instead of duplicating" and "confirmed themes stay confirmed".
+   */
+  findByKey(patternKey: string): Pattern | undefined;
+}
+
+export interface PatternRepository extends PatternReader {
+  insert(pattern: Pattern): void;
+  /** Persists only if the stored row is still `candidate`; false otherwise. */
+  resolveIfCandidate(pattern: Pattern): boolean;
+  /** Persists a grown evidence set only if the stored row is still `candidate`; false otherwise. */
+  growIfCandidate(pattern: Pattern): boolean;
+}
+
+export interface PlanningRuleReader {
+  findById(id: EntityId): PlanningRule | undefined;
+  listActive(): PlanningRule[];
+  listAll(limit: number): PlanningRule[];
+}
+
+export interface PlanningRuleRepository extends PlanningRuleReader {
+  insert(rule: PlanningRule): void;
+  /** Persists only if the stored row is still `active`; false otherwise. */
+  deactivateIfActive(rule: PlanningRule): boolean;
 }
 
 /**
@@ -192,8 +296,39 @@ export type CancelSignal = {
   addEventListener(type: "abort", listener: () => void, options?: { once?: boolean }): void;
   removeEventListener(type: "abort", listener: () => void): void;
 };
+/**
+ * One fact/record the review's evidence pack hands the AI; `id` is the only valid `evidenceRefs` value.
+ * `factIds` is the item's canonical underlying-fact identity — never shown to the AI, used only by
+ * `finishReview` to resolve a finding's `evidenceFactIds` (H2 fix). A primary fact's own `id` doubles as
+ * its one factId; a derived item (an aggregated work total, a Memory explicitly linked to its source
+ * Capture) additionally carries the factIds of whatever it was built from, so two items describing the
+ * same underlying reality overlap here even when their display `id`s differ.
+ */
+export type ReviewEvidenceItem = { readonly id: string; readonly text: string; readonly factIds: readonly string[] };
+
+export type ReviewEvidencePack = {
+  readonly reviewId: EntityId;
+  readonly type: ReviewType;
+  readonly periodStart: Instant;
+  readonly periodEnd: Instant;
+  readonly timeZone: string;
+  readonly items: readonly ReviewEvidenceItem[];
+  /** True if real evidence exists beyond `items` (bound reached) — told to the AI so it never treats a cut list as complete. */
+  readonly truncated: boolean;
+  /** Existing recurring-theme slugs (with an example) so the AI can reuse one instead of inventing a near-duplicate. */
+  readonly knownPatternThemes: readonly { readonly patternKey: string; readonly text: string }[];
+};
+
+export type ReviewRunOutcome = { ok: true; result: ReviewAiResult } | { ok: false; failure: AiFailure };
+
 export interface AiRunner {
   processCapture(input: AiRunInput, signal: CancelSignal): Promise<AiRunOutcome>;
+  /**
+   * A second job kind through the same replaceable transport (ADR-0007): the AI never queries
+   * LivingMap itself for this job — every fact it may cite is already in `evidence.items`, so
+   * evidence validation is a closed-set membership check, never trust in a model-invented id.
+   */
+  processReview(evidence: ReviewEvidencePack, signal: CancelSignal): Promise<ReviewRunOutcome>;
 }
 
 /** Lightweight change-log entry (ARCHITECTURE §20); actor / correlation come from the command context. */
@@ -202,6 +337,13 @@ export type ChangeRecord = {
   entityType: string;
   entityId: EntityId;
   summary: string;
+  /**
+   * The Capture this entry was produced from, when the command ran inside a Capture's AI job
+   * (`ctx.captureId`) — lets Review evidence (`review-evidence.ts`) see through to the same underlying
+   * lived fact as the Capture itself, the same provenance link `Memory.sourceCaptureId` already gives
+   * Memory. Omitted/null for entries not produced from a Capture.
+   */
+  sourceCaptureId?: EntityId | null;
 };
 
 /** A stored change-log row, as read back for the product-facing history query. */
@@ -214,6 +356,10 @@ export type ChangeLogEntry = ChangeRecord & {
 
 export interface ChangeLogReader {
   listRecent(limit: number): ChangeLogEntry[];
+  /** Every entry (unfiltered, including technical ones `listRecent` hides) in [from, to), oldest first — Review evidence. */
+  listBetween(from: Instant, to: Instant): ChangeLogEntry[];
+  /** Every entry of these command types, ever, oldest first — season-boundary detection (Stage 7 §7). */
+  listByCommandTypes(commandTypes: readonly string[]): ChangeLogEntry[];
 }
 
 export interface ReadScope {
@@ -230,6 +376,10 @@ export interface ReadScope {
   settings: SettingsReader;
   captures: CaptureReader;
   memories: MemoryReader;
+  reviews: ReviewReader;
+  reviewFindings: ReviewFindingReader;
+  patterns: PatternReader;
+  planningRules: PlanningRuleReader;
   stateRevision(): number;
 }
 
@@ -246,6 +396,12 @@ export interface WriteScope {
   settings: SettingsRepository;
   captures: CaptureRepository;
   memories: MemoryRepository;
+  reviews: ReviewRepository;
+  reviewFindings: ReviewFindingRepository;
+  patterns: PatternRepository;
+  planningRules: PlanningRuleRepository;
+  /** Read-only: Review evidence-gathering needs to read change_log from inside a write transaction too. */
+  changeLog: ChangeLogReader;
   /** The committed revision this transaction started from — still the pre-bump value after recordChange. */
   stateRevision(): number;
   /**

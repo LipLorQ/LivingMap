@@ -24,6 +24,7 @@ export const changeLog = sqliteTable(
     correlationId: text("correlation_id").notNull(),
     summary: text("summary").notNull(),
     stateRevision: integer("state_revision").notNull(),
+    sourceCaptureId: text("source_capture_id"),
   },
   (t) => [index("change_log_entity_idx").on(t.entityType, t.entityId)],
 );
@@ -215,6 +216,9 @@ export const memories = sqliteTable(
     type: text("type").notNull(),
     text: text("text").notNull(),
     sourceCaptureId: text("source_capture_id"),
+    // M-A (ADR-0008): true only when `sourceCaptureId` came from the trusted Capture-job context, not
+    // an AI-supplied argument from an untethered session — the signal Pattern provenance trusts.
+    sourceCaptureVerified: integer("source_capture_verified", { mode: "boolean" }).notNull().default(false),
     linkedEntityIds: text("linked_entity_ids", { mode: "json" }).$type<string[]>().notNull(),
     createdBy: text("created_by").notNull(),
     createdAt: text("created_at").notNull(),
@@ -248,4 +252,104 @@ export const proposals = sqliteTable(
     resolvedBy: text("resolved_by"),
   },
   (t) => [index("proposals_status_idx").on(t.status)],
+);
+
+/**
+ * One closed period being learned from (Stage 7). The unique index makes "no duplicate Review for
+ * the same period" a database fact, not just an application check (this stage's prompt §10).
+ */
+export const reviews = sqliteTable(
+  "reviews",
+  {
+    id: text("id").primaryKey(),
+    /** 'daily' | 'weekly' | 'seasonal' | 'yearly' (ReviewType). */
+    type: text("type").notNull(),
+    periodStart: text("period_start").notNull(),
+    periodEnd: text("period_end").notNull(),
+    timeZone: text("time_zone").notNull(),
+    /** 'needs_ai' | 'processing' | 'ready' | 'no_useful_change' | 'failed' (ReviewStatus). */
+    status: text("status").notNull(),
+    attempts: integer("attempts").notNull(),
+    lastError: text("last_error"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => [
+    uniqueIndex("reviews_type_period_idx").on(t.type, t.periodStart, t.periodEnd),
+    index("reviews_type_status_idx").on(t.type, t.status),
+  ],
+);
+
+/**
+ * One thing the AI thinks should change future decisions, tied to the evidence it cited (Stage 7
+ * §3/§11/§21). `text` is the AI's own draft and is never edited in place; a correction lives
+ * separately in `correctedText` so the draft stays auditable.
+ */
+export const reviewFindings = sqliteTable(
+  "review_findings",
+  {
+    id: text("id").primaryKey(),
+    reviewId: text("review_id").notNull(),
+    text: text("text").notNull(),
+    evidenceRefs: text("evidence_refs", { mode: "json" }).$type<string[]>().notNull(),
+    /** Canonical underlying-fact ids `evidenceRefs` resolve to (Stage 7 H2 fix) — the Pattern pipeline's join key for independence, never shown to the AI. */
+    evidenceFactIds: text("evidence_fact_ids", { mode: "json" }).$type<string[]>().notNull(),
+    suggestion: text("suggestion"),
+    /** Short stable slug the AI gave a recurring theme, if any — the Pattern pipeline's join key. */
+    patternKey: text("pattern_key"),
+    /** 'proposed' | 'accepted' | 'corrected' | 'rejected' (ReviewFindingStatus). */
+    status: text("status").notNull(),
+    correctedText: text("corrected_text"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => [
+    index("review_findings_review_idx").on(t.reviewId),
+    index("review_findings_pattern_key_idx").on(t.patternKey),
+    foreignKey({ columns: [t.reviewId], foreignColumns: [reviews.id] }).onDelete("cascade"),
+  ],
+);
+
+/**
+ * «Похоже, это повторяется» (Stage 7 §14–16): surfaced once >= MIN_PATTERN_EVIDENCE accepted/corrected
+ * findings from distinct review periods share a `patternKey`. `evidenceFindingIds` is a JSON array,
+ * the same convention as `ordered_action_plans.ordered_action_ids` — its invariants live in the domain.
+ */
+export const patterns = sqliteTable(
+  "patterns",
+  {
+    id: text("id").primaryKey(),
+    /** The AI-given theme slug this candidate was surfaced for; at most one non-rejected row per key. */
+    patternKey: text("pattern_key").notNull(),
+    text: text("text").notNull(),
+    /** 'candidate' | 'confirmed' | 'rejected' (PatternStatus). */
+    status: text("status").notNull(),
+    evidenceFindingIds: text("evidence_finding_ids", { mode: "json" }).$type<string[]>().notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    resolvedAt: text("resolved_at"),
+    resolvedBy: text("resolved_by"),
+  },
+  (t) => [index("patterns_status_idx").on(t.status), index("patterns_key_idx").on(t.patternKey)],
+);
+
+/**
+ * Durable planning context (Stage 7 §17–18): becomes active only through confirming a Pattern
+ * (user-ui only — MCP/AI has no write path here at all, unlike every other write table).
+ */
+export const planningRules = sqliteTable(
+  "planning_rules",
+  {
+    id: text("id").primaryKey(),
+    text: text("text").notNull(),
+    /** 'active' | 'inactive' (PlanningRuleStatus). */
+    status: text("status").notNull(),
+    sourcePatternId: text("source_pattern_id").notNull(),
+    createdAt: text("created_at").notNull(),
+    deactivatedAt: text("deactivated_at"),
+  },
+  (t) => [
+    index("planning_rules_status_idx").on(t.status),
+    foreignKey({ columns: [t.sourcePatternId], foreignColumns: [patterns.id] }),
+  ],
 );

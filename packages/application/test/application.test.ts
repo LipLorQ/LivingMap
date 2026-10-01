@@ -1,278 +1,9 @@
 import type { CalendarSnapshotDto } from "@living-map/contracts";
-import type {
-  Action,
-  GoodLifeCondition,
-  Instant,
-  Intention,
-  OrderedActionPlan,
-  Proposal,
-  Season,
-  Stage,
-} from "@living-map/domain";
 import { describe, expect, it } from "vitest";
-import { type Clock, createApplication, type IdGenerator, isAllowed, type Store } from "../src";
-
-// In-memory Store fake: exercises application logic without any storage technology.
-function memoryStore(): Store & { revision: number; changes: string[]; rollbacks: number } {
-  let seasonRow: Season | undefined;
-  const glc = new Map<string, GoodLifeCondition>();
-  const intentionRows = new Map<string, Intention>();
-  const stageRows = new Map<string, Stage>();
-  const actionRows = new Map<string, Action>();
-  // Stage 3 aggregates are exercised against real SQLite (persistence-sqlite/test/planning.test.ts);
-  // here they only need to exist so the fake satisfies the scope ports.
-  const planRows = new Map<string, OrderedActionPlan>();
-  const proposalRows = new Map<string, Proposal>();
-  let calendarRow: CalendarSnapshotDto = {
-    connected: false,
-    syncedAt: null,
-    source: null,
-    timeZone: null,
-    events: [],
-    lastError: null,
-  };
-  const calendarReader = { get: () => calendarRow };
-  // Execution (Stage 5) is exercised against real SQLite (persistence-sqlite/test/execution.test.ts).
-  const workReader = { findRunning: () => undefined, listByAction: () => [], listEndedSince: () => [] };
-  const settingsReader = { dailyWorkTargetMinutes: () => 360 };
-  // Captures / Memory (Stage 6) are exercised against real SQLite (persistence-sqlite/test/capture.test.ts).
-  const capturesReader = { findById: () => undefined, listRecent: () => [], findNextPending: () => undefined };
-  const memoriesReader = { list: () => [], listBySourceCaptures: () => [] };
-  const plansReader = { findByIntention: (iid: string) => [...planRows.values()].find((p) => p.intentionId === iid) };
-  const proposalsReader = {
-    findById: (id: string) => proposalRows.get(id),
-    listPending: () => [...proposalRows.values()].filter((p) => p.status === "pending"),
-  };
-  const changeLogRows: Array<{
-    id: string;
-    timestamp: Instant;
-    actor: string;
-    correlationId: string;
-    stateRevision: number;
-    commandType: string;
-    entityType: string;
-    entityId: string;
-    summary: string;
-  }> = [];
-
-  const byPosition = <T extends { position: number }>(items: T[]) => items.sort((a, b) => a.position - b.position);
-
-  const state = {
-    revision: 0,
-    changes: [] as string[],
-    rollbacks: 0,
-    read: <T>(work: Parameters<Store["read"]>[0]) =>
-      work({
-        season: { get: () => seasonRow },
-        goodLifeConditions: { findById: (id) => glc.get(id), list: () => byPosition([...glc.values()]) },
-        intentions: {
-          findById: (id) => intentionRows.get(id),
-          list: () => [...intentionRows.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
-        },
-        stages: {
-          findById: (id) => stageRows.get(id),
-          listByIntention: (iid) => byPosition([...stageRows.values()].filter((s) => s.intentionId === iid)),
-        },
-        actions: {
-          findById: (id) => actionRows.get(id),
-          listByStage: (sid) => byPosition([...actionRows.values()].filter((a) => a.stageId === sid)),
-          listByStages: (sids) => byPosition([...actionRows.values()].filter((a) => sids.includes(a.stageId))),
-        },
-        plans: plansReader,
-        proposals: proposalsReader,
-        changeLog: { listRecent: (limit) => changeLogRows.slice().reverse().slice(0, limit) },
-        calendar: calendarReader,
-        work: workReader,
-        settings: settingsReader,
-        captures: capturesReader,
-        memories: memoriesReader,
-        stateRevision: () => state.revision,
-      }) as T,
-    touchWorkHeartbeat: () => {},
-    write: <T>(ctx: Parameters<Store["write"]>[0], work: Parameters<Store["write"]>[1]) => {
-      const snapshot = {
-        season: seasonRow,
-        glc: new Map(glc),
-        intentionRows: new Map(intentionRows),
-        stageRows: new Map(stageRows),
-        actionRows: new Map(actionRows),
-        planRows: new Map(planRows),
-        proposalRows: new Map(proposalRows),
-        calendarRow,
-        revision: state.revision,
-        changes: [...state.changes],
-        changeLogRows: [...changeLogRows],
-      };
-      try {
-        return runWork(work);
-      } catch (error) {
-        seasonRow = snapshot.season;
-        calendarRow = snapshot.calendarRow;
-        glc.clear();
-        for (const [k, v] of snapshot.glc) glc.set(k, v);
-        intentionRows.clear();
-        for (const [k, v] of snapshot.intentionRows) intentionRows.set(k, v);
-        stageRows.clear();
-        for (const [k, v] of snapshot.stageRows) stageRows.set(k, v);
-        actionRows.clear();
-        for (const [k, v] of snapshot.actionRows) actionRows.set(k, v);
-        planRows.clear();
-        for (const [k, v] of snapshot.planRows) planRows.set(k, v);
-        proposalRows.clear();
-        for (const [k, v] of snapshot.proposalRows) proposalRows.set(k, v);
-        state.revision = snapshot.revision;
-        state.changes = snapshot.changes;
-        changeLogRows.length = 0;
-        changeLogRows.push(...snapshot.changeLogRows);
-        state.rollbacks++;
-        throw error;
-      }
-      function runWork(w: Parameters<Store["write"]>[1]): T {
-        const startRevision = state.revision;
-        return w({
-          season: {
-            get: () => seasonRow,
-            insert: (s) => {
-              seasonRow = s;
-            },
-            updateIfVersion: (s, expected) => {
-              if (seasonRow?.version !== expected) return false;
-              seasonRow = s;
-              return true;
-            },
-          },
-          goodLifeConditions: {
-            findById: (id) => glc.get(id),
-            list: () => byPosition([...glc.values()]),
-            insert: (c) => void glc.set(c.id, c),
-            updateIfVersion: (c, expected) => {
-              if (glc.get(c.id)?.version !== expected) return false;
-              glc.set(c.id, c);
-              return true;
-            },
-            removeIfVersion: (id, expected) => {
-              if (glc.get(id)?.version !== expected) return false;
-              glc.delete(id);
-              return true;
-            },
-            reorder: (positions, now) => {
-              for (const [id, position] of positions) {
-                const cur = glc.get(id);
-                if (cur) glc.set(id, { ...cur, position, version: cur.version + 1, updatedAt: now });
-              }
-            },
-          },
-          intentions: {
-            findById: (id) => intentionRows.get(id),
-            list: () => [...intentionRows.values()],
-            insert: (i) => void intentionRows.set(i.id, i),
-            updateIfVersion: (i, expected) => {
-              if (intentionRows.get(i.id)?.version !== expected) return false;
-              intentionRows.set(i.id, i);
-              return true;
-            },
-          },
-          stages: {
-            findById: (id) => stageRows.get(id),
-            listByIntention: (iid) => byPosition([...stageRows.values()].filter((s) => s.intentionId === iid)),
-            insert: (s) => void stageRows.set(s.id, s),
-            updateIfVersion: (s, expected) => {
-              if (stageRows.get(s.id)?.version !== expected) return false;
-              stageRows.set(s.id, s);
-              return true;
-            },
-            reorder: (positions, now) => {
-              for (const [id, position] of positions) {
-                const cur = stageRows.get(id);
-                if (cur) stageRows.set(id, { ...cur, position, version: cur.version + 1, updatedAt: now });
-              }
-            },
-            setCurrent: (intentionId, stageId, now) => {
-              for (const [id, s] of stageRows) {
-                if (s.intentionId !== intentionId || s.isCurrent === (id === stageId)) continue;
-                stageRows.set(id, { ...s, isCurrent: id === stageId, version: s.version + 1, updatedAt: now });
-              }
-            },
-          },
-          actions: {
-            findById: (id) => actionRows.get(id),
-            listByStage: (sid) => byPosition([...actionRows.values()].filter((a) => a.stageId === sid)),
-            listByStages: (sids) => byPosition([...actionRows.values()].filter((a) => sids.includes(a.stageId))),
-            insert: (a) => void actionRows.set(a.id, a),
-            updateIfVersion: (a, expected) => {
-              if (actionRows.get(a.id)?.version !== expected) return false;
-              actionRows.set(a.id, a);
-              return true;
-            },
-            reorder: (positions, now) => {
-              for (const [id, position] of positions) {
-                const cur = actionRows.get(id);
-                if (cur) actionRows.set(id, { ...cur, position, version: cur.version + 1, updatedAt: now });
-              }
-            },
-          },
-          plans: {
-            ...plansReader,
-            insert: (p) => void planRows.set(p.id, p),
-            updateIfVersion: (p, expected) => {
-              if (planRows.get(p.id)?.version !== expected) return false;
-              planRows.set(p.id, p);
-              return true;
-            },
-          },
-          proposals: {
-            ...proposalsReader,
-            insert: (p) => void proposalRows.set(p.id, p),
-            resolveIfPending: (p) => {
-              if (proposalRows.get(p.id)?.status !== "pending") return false;
-              proposalRows.set(p.id, p);
-              return true;
-            },
-          },
-          calendar: {
-            get: () => calendarRow,
-            save: (snapshot) => {
-              calendarRow = snapshot;
-            },
-          },
-          work: { ...workReader, insert: () => {}, closeIfRunning: () => false },
-          settings: { ...settingsReader, setDailyWorkTargetMinutes: () => {} },
-          captures: {
-            ...capturesReader,
-            insert: () => {},
-            claim: () => false,
-            finish: () => false,
-            requeue: () => false,
-            linkProposal: () => false,
-            recover: () => 0,
-          },
-          memories: { ...memoriesReader, insert: () => {}, remove: () => false },
-          stateRevision: () => startRevision,
-          recordChange: (c) => {
-            state.changes.push(c.commandType);
-            if (state.revision === startRevision) state.revision++;
-            changeLogRows.push({
-              id: `cl-${state.revision}`,
-              timestamp: ctx.timestamp,
-              actor: ctx.actor,
-              correlationId: ctx.correlationId,
-              stateRevision: state.revision,
-              ...c,
-            });
-            return state.revision;
-          },
-        }) as T;
-      }
-    },
-  };
-  return state;
-}
+import { type Clock, createApplication, isAllowed, type Store } from "../src";
+import { memoryStore, sequentialIds } from "./fakes";
 
 const fakeClock: Clock = { now: () => "2026-09-27T10:00:00.000Z" };
-function sequentialIds(): IdGenerator {
-  let n = 0;
-  return { next: () => `00000000-0000-4000-8000-${String(++n).padStart(12, "0")}` };
-}
 
 function setup() {
   const store = memoryStore();
@@ -302,7 +33,7 @@ describe("Season", () => {
     const ui = app.newContext("user-ui", "test");
     const created = app.commands.createSeason(ui, { focus: "recover" });
     if (!created.ok) throw new Error(created.error.message);
-    const updated = app.commands.updateSeasonFocus(ui, { expectedVersion: 1, focus: "ship" });
+    const updated = app.commands.updateSeasonFocus(ui, { expectedVersion: 1, focus: "ship", startsNewSeason: false });
     expect(updated).toMatchObject({ ok: true, value: { focus: "ship", version: 2 } });
     expect(store.revision).toBe(2);
     expect(store.changes).toEqual(["season.create", "season.updateFocus"]);
@@ -322,8 +53,12 @@ describe("Season", () => {
     const { app } = setup();
     const ui = app.newContext("user-ui", "test");
     app.commands.createSeason(ui, { focus: "a" });
-    app.commands.updateSeasonFocus(ui, { expectedVersion: 1, focus: "b" });
-    const stale = app.commands.updateSeasonFocus(app.newContext("system", "test"), { expectedVersion: 1, focus: "c" });
+    app.commands.updateSeasonFocus(ui, { expectedVersion: 1, focus: "b", startsNewSeason: false });
+    const stale = app.commands.updateSeasonFocus(app.newContext("system", "test"), {
+      expectedVersion: 1,
+      focus: "c",
+      startsNewSeason: false,
+    });
     expect(stale).toMatchObject({ ok: false, error: { code: "CONFLICT_RELOAD" } });
     expect(app.queries.getSeason()).toMatchObject({ ok: true, value: { focus: "b", version: 2 } });
   });
@@ -513,7 +248,7 @@ describe("change history", () => {
     const { app } = setup();
     const ui = app.newContext("user-ui", "test");
     app.commands.createSeason(ui, { focus: "a" });
-    app.commands.updateSeasonFocus(ui, { expectedVersion: 1, focus: "b" });
+    app.commands.updateSeasonFocus(ui, { expectedVersion: 1, focus: "b", startsNewSeason: false });
     const history = app.queries.listChangeHistory({ limit: 50 });
     if (!history.ok) throw new Error("expected ok");
     expect(history.value.map((h) => h.commandType)).toEqual(["season.updateFocus", "season.create"]);

@@ -20,6 +20,17 @@ export type { Intention } from "./intention";
 export { createIntention, DESIRED_RESULT_MAX, editIntention, INTENTION_TITLE_MAX } from "./intention";
 export type { Memory, MemoryType } from "./memory";
 export { createMemory, MEMORY_TEXT_MAX, rankMemories } from "./memory";
+export type { Pattern, PatternStatus, PlanningRule, PlanningRuleStatus } from "./pattern";
+export {
+  confirmPattern,
+  createPatternCandidate,
+  createPlanningRule,
+  deactivatePlanningRule,
+  growPatternCandidate,
+  MIN_PATTERN_EVIDENCE,
+  PATTERN_TEXT_MAX,
+  rejectPattern,
+} from "./pattern";
 export type { OrderedActionPlan } from "./plan";
 export { createPlan, PLAN_RATIONALE_MAX, replacePlanOrder, unplannedActionIds, validateActionOrder } from "./plan";
 export type { Proposal, ProposalKind, ProposalStatus } from "./proposal";
@@ -31,6 +42,28 @@ export {
   resolveProposal,
 } from "./proposal";
 export { computeReorder } from "./reorder";
+export type {
+  DueReviewPeriod,
+  LastReviewPeriod,
+  Review,
+  ReviewFinding,
+  ReviewFindingStatus,
+  ReviewStatus,
+  ReviewType,
+} from "./review";
+export {
+  acceptedFindingText,
+  acceptFinding,
+  correctFinding,
+  createReview,
+  createReviewFinding,
+  dueDailyPeriods,
+  dueWeeklyPeriods,
+  dueYearlyPeriods,
+  REVIEW_AUTO_RETRY_ATTEMPTS,
+  REVIEW_FINDING_TEXT_MAX,
+  rejectFinding,
+} from "./review";
 export type { RouteChange, RouteOutcome } from "./route";
 export { applyRouteChange } from "./route";
 export type { Season } from "./season";

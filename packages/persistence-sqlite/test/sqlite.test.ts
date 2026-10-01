@@ -147,12 +147,14 @@ describe("two connections share one database", () => {
     const first = m.commands.updateSeasonFocus(m.newContext("system", "test"), {
       expectedVersion: seenByMcp.value.version,
       focus: "from MCP",
+      startsNewSeason: false,
     });
     expect(first).toMatchObject({ ok: true, value: { version: 2, focus: "from MCP" } });
 
     const stale = d.commands.updateSeasonFocus(d.newContext("user-ui", "test"), {
       expectedVersion: seenByDesktop.value.version,
       focus: "stale from UI",
+      startsNewSeason: false,
     });
     expect(stale).toMatchObject({ ok: false, error: { code: "CONFLICT_RELOAD" } });
 
@@ -283,7 +285,11 @@ describe("per-write schema check (ADR-0003)", () => {
     // Simulate desktop migrating the schema further while this connection is still open.
     h.sqlite.pragma(`user_version = ${EXPECTED_SCHEMA_VERSION + 1}`);
 
-    const result = app.commands.updateSeasonFocus(app.newContext("system", "test"), { expectedVersion: 1, focus: "y" });
+    const result = app.commands.updateSeasonFocus(app.newContext("system", "test"), {
+      expectedVersion: 1,
+      focus: "y",
+      startsNewSeason: false,
+    });
     expect(result).toMatchObject({ ok: false, error: { code: "SCHEMA_INCOMPATIBLE" } });
   });
 

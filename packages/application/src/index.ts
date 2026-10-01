@@ -31,9 +31,20 @@ export type {
   MemoryRepository,
   OrderedActionPlanReader,
   OrderedActionPlanRepository,
+  PatternReader,
+  PatternRepository,
+  PlanningRuleReader,
+  PlanningRuleRepository,
   ProposalReader,
   ProposalRepository,
   ReadScope,
+  ReviewEvidenceItem,
+  ReviewEvidencePack,
+  ReviewFindingReader,
+  ReviewFindingRepository,
+  ReviewReader,
+  ReviewRepository,
+  ReviewRunOutcome,
   SeasonReader,
   SeasonRepository,
   SettingsReader,
@@ -47,3 +58,4 @@ export type {
   WriteScope,
 } from "./ports";
 export { SchemaConflictError } from "./ports";
+export { buildReviewEvidence, computeDueReviews, type DueReview } from "./review-evidence";

@@ -208,6 +208,76 @@ describe("Memory v1", () => {
     expect(stored(c.id).raw_text).toBe("Я не хочу превращать разработку в работу на весь день.");
   });
 
+  it("M-A: sourceCaptureVerified is true only when the trusted job context (ctx.captureId) supplied the link, never an AI-supplied argument alone", () => {
+    const c = capture("Приём у врача");
+    const untethered = unwrap(
+      app.commands.saveMemory(ai(), { type: "fact", text: "x", captureId: c.id, linkedEntityIds: [] }),
+    );
+    const trusted = unwrap(
+      createAiSurface(app, c.id).saveMemory({ type: "idea", text: "y", captureId: null, linkedEntityIds: [] }),
+    );
+    const verified = (id: string) =>
+      (
+        handle.sqlite.prepare("select source_capture_verified from memories where id = ?").get(id) as {
+          source_capture_verified: number;
+        }
+      ).source_capture_verified;
+    expect(verified(untethered.id)).toBe(0);
+    expect(verified(trusted.id)).toBe(1);
+  });
+
+  it("M-A: when the trusted job later saves the same Capture+type an untethered session already created unverified, the dedup hit upgrades it to verified instead of discarding the trusted vouch", () => {
+    const c = capture("Приём у врача");
+    const untethered = unwrap(
+      app.commands.saveMemory(ai(), {
+        type: "fact",
+        text: "Врач съедает половину дня",
+        captureId: c.id,
+        linkedEntityIds: [],
+      }),
+    );
+    const verified = (id: string) =>
+      (
+        handle.sqlite.prepare("select source_capture_verified from memories where id = ?").get(id) as {
+          source_capture_verified: number;
+        }
+      ).source_capture_verified;
+    expect(verified(untethered.id)).toBe(0);
+    const revisionBefore = unwrap(app.queries.getStateRevision()).stateRevision;
+
+    // The real Capture-processing job for c runs later (e.g. after a retry) and, describing the same
+    // fact, hits the "one memory per type per Capture" dedup no-op against the existing row.
+    const trustedResave = unwrap(
+      createAiSurface(app, c.id).saveMemory({
+        type: "fact",
+        text: "Врач съедает половину дня, но по-другому сформулировано",
+        captureId: null,
+        linkedEntityIds: [],
+      }),
+    );
+    expect(trustedResave.id).toBe(untethered.id); // still the same dedup no-op
+    expect(verified(untethered.id)).toBe(1); // but now upgraded, not silently discarded
+    // A real mutation happened (ARCHITECTURE §44), but as bookkeeping, not a second "saved a memory":
+    // it bumps the revision (MCP/UI watch) yet stays out of the user-facing history feed.
+    expect(unwrap(app.queries.getStateRevision()).stateRevision).toBeGreaterThan(revisionBefore);
+    expect(unwrap(app.queries.listChangeHistory({ limit: 50 }))).not.toContainEqual(
+      expect.objectContaining({ commandType: "memory.verify" }),
+    );
+
+    // A further trusted retry, now that the row is already verified, is a true no-op: the guard must
+    // not fire twice or the §44 check would throw on every subsequent retry of the same Capture+type.
+    const revisionAfterUpgrade = unwrap(app.queries.getStateRevision()).stateRevision;
+    unwrap(
+      createAiSurface(app, c.id).saveMemory({
+        type: "fact",
+        text: "Третья формулировка того же факта",
+        captureId: null,
+        linkedEntityIds: [],
+      }),
+    );
+    expect(unwrap(app.queries.getStateRevision()).stateRevision).toBe(revisionAfterUpgrade);
+  });
+
   it("links must point at existing entities; filter by entity works", () => {
     const i = unwrap(app.commands.createIntention(ui(), { title: "Ship", desiredResult: "Used" }));
     expect(

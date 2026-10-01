@@ -1,20 +1,30 @@
 import type { Application } from "@living-map/application";
 import {
+  AcceptReviewFindingInputSchema,
   AddActionInputSchema,
   AddGoodLifeConditionInputSchema,
   AddStageInputSchema,
   BlockActionInputSchema,
   CompleteActionInputSchema,
+  ConfirmPatternInputSchema,
   ConnectCalendarInputSchema,
+  CorrectReviewFindingInputSchema,
   CreateIntentionInputSchema,
   CreateSeasonInputSchema,
+  DeactivatePlanningRuleInputSchema,
   EditActionInputSchema,
   EditGoodLifeConditionInputSchema,
   EditStageInputSchema,
   err,
   ForgetMemoryInputSchema,
+  GetReviewInputSchema,
   ListCapturesInputSchema,
   ListChangeHistoryInputSchema,
+  ListPatternCandidatesInputSchema,
+  ListPlanningRulesInputSchema,
+  ListReviewsInputSchema,
+  RejectPatternInputSchema,
+  RejectReviewFindingInputSchema,
   RemoveGoodLifeConditionInputSchema,
   ReopenActionInputSchema,
   ReorderActionsInputSchema,
@@ -23,6 +33,7 @@ import {
   ResolveProposalInputSchema,
   type Result,
   RetryCaptureInputSchema,
+  RetryReviewInputSchema,
   SearchMemoryInputSchema,
   SetCurrentStageInputSchema,
   SetDailyWorkTargetInputSchema,
@@ -36,6 +47,7 @@ import { IPC_CHANNELS } from "@living-map/contracts/ipc";
 import { ipcMain, type WebFrameMain } from "electron";
 import { z } from "zod";
 import type { CaptureProcessor } from "./ai/capture-processor";
+import type { ReviewProcessor } from "./ai/review-processor";
 import type { CalendarOrchestrator } from "./calendar";
 
 type TrustCheck = (frame: WebFrameMain | null) => boolean;
@@ -49,6 +61,7 @@ export function registerIpcHandlers(
   isTrusted: TrustCheck,
   calendar: CalendarOrchestrator,
   captures: CaptureProcessor,
+  reviews: ReviewProcessor,
 ): void {
   function handle<S extends z.ZodType>(
     channel: string,
@@ -145,4 +158,31 @@ export function registerIpcHandlers(
   // Memory v1: the user can see what LivingMap remembered and forget it (never reachable from MCP).
   handle(IPC_CHANNELS.searchMemory, SearchMemoryInputSchema, (input) => app.queries.searchMemory(input));
   handle(IPC_CHANNELS.forgetMemory, ForgetMemoryInputSchema, (input) => app.commands.forgetMemory(ui(), input));
+
+  // Reviews / Patterns / PlanningRules (Stage 7): desktop only — never reachable from MCP.
+  handle(IPC_CHANNELS.listReviews, ListReviewsInputSchema, (input) => app.queries.listReviews(input));
+  handle(IPC_CHANNELS.getReview, GetReviewInputSchema, (input) => app.queries.getReview(input));
+  handle(IPC_CHANNELS.retryReview, RetryReviewInputSchema, (input) => {
+    const result = app.commands.retryReview(ui(), input);
+    if (result.ok) reviews.kick();
+    return result;
+  });
+  handle(IPC_CHANNELS.acceptReviewFinding, AcceptReviewFindingInputSchema, (input) =>
+    app.commands.acceptReviewFinding(ui(), input),
+  );
+  handle(IPC_CHANNELS.correctReviewFinding, CorrectReviewFindingInputSchema, (input) =>
+    app.commands.correctReviewFinding(ui(), input),
+  );
+  handle(IPC_CHANNELS.rejectReviewFinding, RejectReviewFindingInputSchema, (input) =>
+    app.commands.rejectReviewFinding(ui(), input),
+  );
+  handle(IPC_CHANNELS.listPatternCandidates, ListPatternCandidatesInputSchema, (input) =>
+    app.queries.listPatternCandidates(input),
+  );
+  handle(IPC_CHANNELS.confirmPattern, ConfirmPatternInputSchema, (input) => app.commands.confirmPattern(ui(), input));
+  handle(IPC_CHANNELS.rejectPattern, RejectPatternInputSchema, (input) => app.commands.rejectPattern(ui(), input));
+  handle(IPC_CHANNELS.listPlanningRules, ListPlanningRulesInputSchema, (input) => app.queries.listPlanningRules(input));
+  handle(IPC_CHANNELS.deactivatePlanningRule, DeactivatePlanningRuleInputSchema, (input) =>
+    app.commands.deactivatePlanningRule(ui(), input),
+  );
 }

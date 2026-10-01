@@ -153,7 +153,11 @@ describe("desktop + separate MCP process share one SQLite", () => {
 
     const created = app.commands.createSeason(app.newContext("user-ui", "test"), { focus: "x" });
     if (!created.ok) throw new Error(created.error.message);
-    app.commands.updateSeasonFocus(app.newContext("user-ui", "test"), { expectedVersion: 1, focus: "y" });
+    app.commands.updateSeasonFocus(app.newContext("user-ui", "test"), {
+      expectedVersion: 1,
+      focus: "y",
+      startsNewSeason: false,
+    });
 
     expect(await call(client, "get_state_revision")).toEqual({ ok: true, value: { stateRevision: 2 } });
   });

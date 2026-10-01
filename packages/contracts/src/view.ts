@@ -4,8 +4,10 @@ import { CalendarSnapshotDtoSchema } from "./calendar";
 import { ChangeLogEntryDtoSchema } from "./change-log";
 import { GoodLifeConditionDtoSchema } from "./good-life-condition";
 import { IntentionDtoSchema } from "./intention";
+import { PlanningRuleDtoSchema } from "./pattern";
 import { OrderedActionPlanDtoSchema } from "./plan";
 import { ProposalDtoSchema } from "./proposal";
+import { ReviewInboxDtoSchema } from "./review";
 import { SeasonDtoSchema } from "./season";
 import { StageDtoSchema } from "./stage";
 import { ExecutionDtoSchema } from "./work";
@@ -48,6 +50,8 @@ export const CurrentViewDtoSchema = z.object({
   needsAiReplan: z.boolean(),
   calendarSnapshot: CalendarSnapshotDtoSchema,
   execution: ExecutionDtoSchema,
+  /** Compact «Разборы» nav badge (Stage 7); the full list/detail is its own query. */
+  reviewInbox: ReviewInboxDtoSchema,
 });
 export type CurrentViewDto = z.infer<typeof CurrentViewDtoSchema>;
 
@@ -57,5 +61,7 @@ export const PlanningContextDtoSchema = CurrentViewDtoSchema.extend({
   /** Product meaning of each concept, so the AI does not have to guess from technical names. */
   meanings: z.record(z.string(), z.string()),
   recentHistory: z.array(ChangeLogEntryDtoSchema),
+  /** Confirmed, still-active PlanningRules (Stage 7 §18/§24): explicit context, never a hard constraint. */
+  activePlanningRules: z.array(PlanningRuleDtoSchema),
 });
 export type PlanningContextDto = z.infer<typeof PlanningContextDtoSchema>;

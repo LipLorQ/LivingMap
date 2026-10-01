@@ -10,6 +10,10 @@ const api: LivingMapApi = {
     listChangeHistory: (input) => ipcRenderer.invoke(IPC_CHANNELS.listChangeHistory, input),
     listCaptures: (input) => ipcRenderer.invoke(IPC_CHANNELS.listCaptures, input),
     searchMemory: (input) => ipcRenderer.invoke(IPC_CHANNELS.searchMemory, input),
+    listReviews: (input) => ipcRenderer.invoke(IPC_CHANNELS.listReviews, input),
+    getReview: (input) => ipcRenderer.invoke(IPC_CHANNELS.getReview, input),
+    listPatternCandidates: (input) => ipcRenderer.invoke(IPC_CHANNELS.listPatternCandidates, input),
+    listPlanningRules: (input) => ipcRenderer.invoke(IPC_CHANNELS.listPlanningRules, input),
   },
   commands: {
     createSeason: (input) => ipcRenderer.invoke(IPC_CHANNELS.createSeason, input),
@@ -42,6 +46,13 @@ const api: LivingMapApi = {
     submitCapture: (input) => ipcRenderer.invoke(IPC_CHANNELS.submitCapture, input),
     retryCapture: (input) => ipcRenderer.invoke(IPC_CHANNELS.retryCapture, input),
     forgetMemory: (input) => ipcRenderer.invoke(IPC_CHANNELS.forgetMemory, input),
+    retryReview: (input) => ipcRenderer.invoke(IPC_CHANNELS.retryReview, input),
+    acceptReviewFinding: (input) => ipcRenderer.invoke(IPC_CHANNELS.acceptReviewFinding, input),
+    correctReviewFinding: (input) => ipcRenderer.invoke(IPC_CHANNELS.correctReviewFinding, input),
+    rejectReviewFinding: (input) => ipcRenderer.invoke(IPC_CHANNELS.rejectReviewFinding, input),
+    confirmPattern: (input) => ipcRenderer.invoke(IPC_CHANNELS.confirmPattern, input),
+    rejectPattern: (input) => ipcRenderer.invoke(IPC_CHANNELS.rejectPattern, input),
+    deactivatePlanningRule: (input) => ipcRenderer.invoke(IPC_CHANNELS.deactivatePlanningRule, input),
   },
   events: {
     onStateChanged: (listener) => {

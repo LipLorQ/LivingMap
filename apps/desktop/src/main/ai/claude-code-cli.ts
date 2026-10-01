@@ -4,8 +4,14 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { delimiter, isAbsolute, join } from "node:path";
-import type { AiRunner, AiRunOutcome, CancelSignal } from "@living-map/application";
-import { type AiFailure, CaptureAiResultSchema } from "@living-map/contracts";
+import type {
+  AiRunner,
+  AiRunOutcome,
+  CancelSignal,
+  ReviewEvidencePack,
+  ReviewRunOutcome,
+} from "@living-map/application";
+import { type AiFailure, CaptureAiResultSchema, ReviewAiTransportSchema } from "@living-map/contracts";
 import { z } from "zod";
 
 export type McpServerLaunch = { command: string; args: string[]; env: Record<string, string> };
@@ -91,6 +97,78 @@ export function buildClaudeArgs(mcpServer: McpServerLaunch): string[] {
 export function buildUserMessage(input: { captureId: string; rawText: string }, now: Date, timeZone: string): string {
   const today = new Intl.DateTimeFormat("ru-RU", { dateStyle: "full", timeStyle: "short", timeZone }).format(now);
   return `Сейчас: ${today} (${timeZone}). captureId: ${input.captureId}\nСообщение пользователя из «+» (дословно):\n${input.rawText}`;
+}
+
+// Stage 7: a second job kind through the same replaceable transport (ADR-0007). Unlike a Capture,
+// a Review never needs to call a tool — every fact it may cite is already handed to it on stdin.
+// `--tools ""` blocks built-ins; `--strict-mcp-config` with an empty server list additionally blocks
+// the user's own `~/.claude.json`/project `.mcp.json` servers from being loaded at all (without it,
+// Claude Code would still load THOSE even though this run passes none of its own).
+const REVIEW_SYSTEM_PROMPT = `You are the AI inside «Живая карта» (LivingMap), reviewing one closed period of the user's real life (Stage 7: разборы и обучение на прожитом). This is NOT a diary and NOT a status summary — a finding earns its place only if it would change a future decision.
+
+You have no tools. Every fact you may use is given to you below as a numbered evidence list with stable ids — you cannot look anything else up, and you must never invent a fact that is not in that list. If the list says facts were omitted, do not assume the period was actually quieter than it was — say so is fine, inventing what might be missing is not.
+
+Review types differ in what matters:
+- daily: what changed about how work actually went today vs assumed, one repeated blocker, a commitment that changed what was possible. Not a log of the day.
+- weekly: real results completed, an Intention/Stage that stalled with no activity, actual working capacity vs the target, important commitments, candidate patterns.
+- seasonal: what actually changed since the season before, what assumptions proved wrong, whether the season's direction still makes sense given the evidence.
+- yearly: only what the actual evidence of the year supports. There is no long-horizon life map yet to compare against — never invent one or describe a "trajectory"; if you cannot say something grounded, that is a truthful "no_useful_change" for this dimension, not a reason to guess.
+
+Do the smallest right thing:
+- If nothing in the evidence would change a future decision, answer kind "no_useful_change" — this is the common, healthy outcome; do not force a finding to exist.
+- Otherwise, list findings (0–3 is the normal range; more only if something is genuinely critical). Each finding: "text" in Russian, 1-3 sentences — what should change future decisions, never a chronological recap, never praise, never "ты поработал N минут" by itself. "evidenceRefs" must be copied exactly from the ids given to you (at least one; anything you did not receive makes your whole answer rejected). "suggestion": a short optional note if a real strategic change seems warranted (route/season/etc.) — you cannot apply it, only the user can, by raising it themselves; otherwise null.
+- Write "text" the way a close friend who actually paid attention would say it out loud, not the way a status report or a consulting deck would. Plain, everyday Russian words; direct verbs; one concrete thought per finding. Never abstract-noun piles ("тенденция к изменению последовательности"), never fake profundity, never analysis-report tone ("наблюдается", "имеет место", "динамика"). Name the actual thing, and — when the evidence supports a count — say the count plainly instead of hedging it away. Bad: «Наблюдается тенденция к изменению последовательности выполнения действий после достижения промежуточных этапов.» Better: «После завершённого этапа ты часто меняешь порядок следующих действий.» Even better, when the evidence shows it twice: «После завершённого этапа ты дважды поменяла порядок следующих действий.» Never make the claim stronger than the evidence just to sound punchier.
+- "patternKey": ONLY if this looks like a recurring theme worth watching for across periods. You are given a list of themes already being tracked, each with an example — if one of them is genuinely the same theme, reuse ITS EXACT slug so the system can recognize the repetition; do not invent a near-duplicate (e.g. "doctor-visits" vs "medical-appointments" must not both exist for the same theme). Only mint a new slug (lowercase-with-hyphens, 3-60 chars) if none of the known themes fit. Otherwise null.
+
+Never claim you changed anything — this job cannot write anything at all.
+
+Your final step is ALWAYS a call to the StructuredOutput tool with { result: { kind, findings? } } — never plain text; plain text is discarded and nothing is recorded.`;
+
+// A discriminated union's JSON Schema is a root `oneOf` with no top-level `type`, which the API
+// rejects for a custom tool's `input_schema` (`tools.0.custom.input_schema.type: Field required`);
+// `ReviewAiTransportSchema` wraps it in an object so the root satisfies Claude while the nested
+// value is still exactly the strict, discriminated `ReviewAiResultSchema` (see contracts/review.ts).
+const REVIEW_RESULT_JSON_SCHEMA = JSON.stringify(z.toJSONSchema(ReviewAiTransportSchema), (key, value) =>
+  key === "format" || key === "$schema" ? undefined : value,
+);
+
+/** `--tools ""` blocks built-ins; `--strict-mcp-config` + an empty server list blocks every MCP server too. */
+export function buildReviewClaudeArgs(): string[] {
+  return [
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--tools",
+    "",
+    "--strict-mcp-config",
+    "--mcp-config",
+    JSON.stringify({ mcpServers: {} }),
+    "--permission-mode",
+    "dontAsk",
+    "--setting-sources",
+    "",
+    "--disable-slash-commands",
+    "--no-session-persistence",
+    "--system-prompt",
+    REVIEW_SYSTEM_PROMPT,
+    "--json-schema",
+    REVIEW_RESULT_JSON_SCHEMA,
+  ];
+}
+
+/** The whole evidence pack travels on stdin — the closed set of facts the AI may cite (Stage 7 §21). */
+export function buildReviewUserMessage(evidence: ReviewEvidencePack, now: Date, timeZone: string): string {
+  const today = new Intl.DateTimeFormat("ru-RU", { dateStyle: "full", timeStyle: "short", timeZone }).format(now);
+  const period = `${evidence.periodStart} — ${evidence.periodEnd} (${evidence.timeZone})`;
+  const list = evidence.items.map((item) => `[${item.id}] ${item.text}`).join("\n");
+  const cutNotice = evidence.truncated
+    ? `\n(показаны первые ${evidence.items.length} фактов из большего числа — остальные не показаны)`
+    : "";
+  const themes = evidence.knownPatternThemes.length
+    ? `\nУже отслеживаемые темы (patternKey — пример): ${evidence.knownPatternThemes.map((t) => `${t.patternKey} — "${t.text}"`).join("; ")}`
+    : "";
+  return `Сейчас: ${today}. Тип разбора: ${evidence.type}. Период: ${period}.\nДоказательства за период (id в квадратных скобках — используй только эти id в evidenceRefs):\n${list || "(за этот период нет доступных фактов)"}${cutNotice}${themes}`;
 }
 
 /** Child environment: no API keys / alternative providers, so a run can only use the subscription login. */
@@ -193,9 +271,17 @@ function classifyErrorText(text: string): AiFailure {
   return "failed";
 }
 
-/** Claude Code `stream-json` output → vendor-neutral outcome. Only `structured_output` is ever trusted. */
-export function interpretCliOutput(stdout: string): AiRunOutcome {
-  const fail = (failure: AiFailure): AiRunOutcome => ({ ok: false, failure });
+/**
+ * Claude Code `stream-json` output → vendor-neutral outcome. Only `structured_output` is ever
+ * trusted. Shared by both job kinds; `requireMcp` is true only for a Capture (a Review has no MCP
+ * server to check at all — see `REVIEW_SYSTEM_PROMPT` above).
+ */
+function interpretStructuredOutput<T>(
+  stdout: string,
+  parse: (value: unknown) => { success: boolean; data?: T },
+  requireMcp: boolean,
+): { ok: true; result: T } | { ok: false; failure: AiFailure } {
+  const fail = (failure: AiFailure) => ({ ok: false, failure }) as const;
   const list = events(stdout);
   const init = findInit(list);
   const apiError = list.find((e) => e.type === "assistant" && typeof e.error === "string")?.error;
@@ -204,21 +290,40 @@ export function interpretCliOutput(stdout: string): AiRunOutcome {
   if (apiError === "authentication_failed" || apiError === "billing_error") return fail("not_authenticated");
   if (apiError === "rate_limit") return fail("rate_limited");
   if (init && usesApiKey(init)) return fail("not_authenticated");
-  const servers = Array.isArray(init?.mcp_servers)
-    ? (init.mcp_servers as Array<{ name?: unknown; status?: unknown }>)
-    : [];
-  // Claude Code emits `init` after waiting only ~2.5 s for MCP: a slower start reads "pending" there, then
-  // connects and its tools work (Gate B: a real Proposal was created by a run marked mcp_failed). Only an
-  // MCP that is absent or reported as anything else (failed / needs-auth) is a transport failure.
-  const mcp = servers.find((s) => s.name === "living-map")?.status;
-  if (init && mcp !== "connected" && mcp !== "pending") return fail("mcp_failed");
+  if (requireMcp) {
+    const servers = Array.isArray(init?.mcp_servers)
+      ? (init.mcp_servers as Array<{ name?: unknown; status?: unknown }>)
+      : [];
+    // Claude Code emits `init` after waiting only ~2.5 s for MCP: a slower start reads "pending" there, then
+    // connects and its tools work (Gate B: a real Proposal was created by a run marked mcp_failed). Only an
+    // MCP that is absent or reported as anything else (failed / needs-auth) is a transport failure.
+    const mcp = servers.find((s) => s.name === "living-map")?.status;
+    if (init && mcp !== "connected" && mcp !== "pending") return fail("mcp_failed");
+  }
   if (!result) return fail(typeof apiError === "string" ? classifyErrorText(apiError) : "failed");
   if (result.is_error === true || result.subtype !== "success") {
     return fail(classifyErrorText(typeof result.result === "string" ? result.result : ""));
   }
-  const parsed = CaptureAiResultSchema.safeParse(result.structured_output);
-  return parsed.success ? { ok: true, result: parsed.data } : fail("malformed");
+  const parsed = parse(result.structured_output);
+  return parsed.success ? { ok: true, result: parsed.data as T } : fail("malformed");
 }
+
+export function interpretCliOutput(stdout: string): AiRunOutcome {
+  return interpretStructuredOutput(stdout, (v) => CaptureAiResultSchema.safeParse(v), true);
+}
+
+export function interpretReviewCliOutput(stdout: string): ReviewRunOutcome {
+  return interpretStructuredOutput(
+    stdout,
+    (v) => {
+      const envelope = ReviewAiTransportSchema.safeParse(v);
+      return envelope.success ? { success: true, data: envelope.data.result } : { success: false };
+    },
+    false,
+  );
+}
+
+type JobRunOutcome = { failure: AiFailure } | { stdout: string };
 
 export function createClaudeCodeCliAiRunner(opts: {
   mcpServer: McpServerLaunch;
@@ -233,50 +338,66 @@ export function createClaudeCodeCliAiRunner(opts: {
   const resolveExecutable = opts.resolveExecutable ?? (() => resolveClaudeExecutable());
   const run = opts.run ?? runProcess;
   const timeZone = opts.timeZone ?? (() => Intl.DateTimeFormat().resolvedOptions().timeZone);
+
+  /** Shared by both job kinds: spawn, refuse an API-key run before any model call, map the stopped code. */
+  async function runJob(args: string[], stdin: string, signal: CancelSignal): Promise<JobRunOutcome> {
+    const file = resolveExecutable();
+    if (!file) return { failure: "not_installed" };
+    mkdirSync(opts.workDir, { recursive: true });
+    const env = childEnv(process.env);
+    const isScript = /\.[cm]?js$/i.test(file);
+    if (isScript) env.ELECTRON_RUN_AS_NODE = "1";
+    let initChecked = false;
+    const out = await run(isScript ? process.execPath : file, isScript ? [file, ...args] : args, {
+      cwd: opts.workDir,
+      env,
+      stdin,
+      signal,
+      timeoutMs: opts.timeoutMs,
+      // Refuse before the first model call if this run would bill an API key instead of the subscription.
+      shouldStop: (sofar) => {
+        if (initChecked) return false;
+        const init = findInit(events(sofar));
+        if (!init) return false;
+        initChecked = true;
+        return usesApiKey(init);
+      },
+    });
+    switch (out.stopped) {
+      case "not_found":
+        return { failure: "not_installed" };
+      case "timeout":
+        return { failure: "timeout" };
+      case "overflow":
+        return { failure: "malformed" };
+      case "refused":
+        return { failure: "not_authenticated" };
+      case "cancelled":
+        return { failure: "failed" };
+      default:
+        return { stdout: out.stdout };
+    }
+  }
+
   return {
     async processCapture(input, signal) {
-      const file = resolveExecutable();
-      if (!file) return { ok: false, failure: "not_installed" };
-      mkdirSync(opts.workDir, { recursive: true });
       // The capture id rides on the MCP child's environment (never the AI's say-so): every write of this
       // run is linked to this Capture, which makes a retry idempotent (ADR-0007).
       const args = buildClaudeArgs({
         ...opts.mcpServer,
         env: { ...opts.mcpServer.env, LIVING_MAP_CAPTURE_ID: input.captureId },
       });
-      const env = childEnv(process.env);
-      const isScript = /\.[cm]?js$/i.test(file);
-      if (isScript) env.ELECTRON_RUN_AS_NODE = "1";
-      let initChecked = false;
-      const out = await run(isScript ? process.execPath : file, isScript ? [file, ...args] : args, {
-        cwd: opts.workDir,
-        env,
-        stdin: buildUserMessage(input, opts.now?.() ?? new Date(), timeZone()),
+      const stdin = buildUserMessage(input, opts.now?.() ?? new Date(), timeZone());
+      const out = await runJob(args, stdin, signal);
+      return "failure" in out ? { ok: false, failure: out.failure } : interpretCliOutput(out.stdout);
+    },
+    async processReview(evidence, signal) {
+      const out = await runJob(
+        buildReviewClaudeArgs(),
+        buildReviewUserMessage(evidence, opts.now?.() ?? new Date(), timeZone()),
         signal,
-        timeoutMs: opts.timeoutMs,
-        // Refuse before the first model call if this run would bill an API key instead of the subscription.
-        shouldStop: (sofar) => {
-          if (initChecked) return false;
-          const init = findInit(events(sofar));
-          if (!init) return false;
-          initChecked = true;
-          return usesApiKey(init);
-        },
-      });
-      switch (out.stopped) {
-        case "not_found":
-          return { ok: false, failure: "not_installed" };
-        case "timeout":
-          return { ok: false, failure: "timeout" };
-        case "overflow":
-          return { ok: false, failure: "malformed" };
-        case "refused":
-          return { ok: false, failure: "not_authenticated" };
-        case "cancelled":
-          return { ok: false, failure: "failed" };
-        default:
-          return interpretCliOutput(out.stdout);
-      }
+      );
+      return "failure" in out ? { ok: false, failure: out.failure } : interpretReviewCliOutput(out.stdout);
     },
   };
 }

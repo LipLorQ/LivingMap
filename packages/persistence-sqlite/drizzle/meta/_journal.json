@@ -92,6 +92,34 @@
       "when": 1790660313152,
       "tag": "0012_capture_proposal_link",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1790697619912,
+      "tag": "0013_add_reviews_and_patterns",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1790732899445,
+      "tag": "0014_review_finding_fact_ids",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1790736917037,
+      "tag": "0015_change_log_source_capture_id",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1790749469112,
+      "tag": "0016_memory_source_capture_verified",
+      "breakpoints": true
     }
   ]
 }

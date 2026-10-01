@@ -8,6 +8,14 @@ export type Memory = {
   readonly type: MemoryType;
   readonly text: string;
   readonly sourceCaptureId: EntityId | null;
+  /**
+   * Whether `sourceCaptureId` came from the trusted Capture-processing job context (`ctx.captureId`,
+   * ARCHITECTURE §9/ADR-0007) rather than an AI-supplied argument from an untethered session (e.g. an
+   * interactive Desktop-chat MCP connection, ADR-0004). Only a verified link is the SAME underlying
+   * lived fact for Stage 7 Pattern-independence purposes (`review-evidence.ts`) — an unverified one is
+   * still a real Stage-6 association (shown to the user), just not proof the two are one event.
+   */
+  readonly sourceCaptureVerified: boolean;
   readonly linkedEntityIds: readonly EntityId[];
   readonly createdBy: string;
   readonly createdAt: Instant;
@@ -20,6 +28,7 @@ export function createMemory(input: {
   type: MemoryType;
   text: string;
   sourceCaptureId: EntityId | null;
+  sourceCaptureVerified: boolean;
   linkedEntityIds: readonly EntityId[];
   createdBy: string;
   now: Instant;
@@ -35,6 +44,7 @@ export function createMemory(input: {
       type: input.type,
       text,
       sourceCaptureId: input.sourceCaptureId,
+      sourceCaptureVerified: input.sourceCaptureId !== null && input.sourceCaptureVerified,
       linkedEntityIds: [...new Set(input.linkedEntityIds)],
       createdBy: input.createdBy,
       createdAt: input.now,

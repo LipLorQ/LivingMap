@@ -1,4 +1,5 @@
 import {
+  type AcceptReviewFindingInput,
   type ActionDto,
   type AddActionInput,
   type AddGoodLifeConditionInput,
@@ -10,10 +11,13 @@ import {
   type CaptureDto,
   type ChangeLogEntryDto,
   type CompleteActionInput,
+  type ConfirmPatternInput,
+  type CorrectReviewFindingInput,
   type CreateIntentionInput,
   type CreateRouteProposalInput,
   type CreateSeasonInput,
   type CurrentViewDto,
+  type DeactivatePlanningRuleInput,
   type EditActionInput,
   type EditGoodLifeConditionInput,
   type EditStageInput,
@@ -21,16 +25,24 @@ import {
   err,
   type ForgetMemoryInput,
   type GetProposalInput,
+  type GetReviewInput,
   type GoodLifeConditionDto,
   type IntentionDto,
   type ListCapturesInput,
   type ListChangeHistoryInput,
+  type ListPatternCandidatesInput,
+  type ListPlanningRulesInput,
+  type ListReviewsInput,
   type MemoryDto,
   type OrderedActionPlanDto,
   ok,
+  type PatternDto,
   type PlanningContextDto,
+  type PlanningRuleDto,
   type ProposalDto,
   type ProposeDesiredResultChangeInput,
+  type RejectPatternInput,
+  type RejectReviewFindingInput,
   type RemoveGoodLifeConditionInput,
   type ReopenActionInput,
   type ReorderActionsInput,
@@ -40,6 +52,12 @@ import {
   type ResolveProposalInput,
   type Result,
   type RetryCaptureInput,
+  type RetryReviewInput,
+  ReviewAiResultSchema,
+  type ReviewDto,
+  type ReviewFindingDto,
+  type ReviewInboxDto,
+  type ReviewWithFindingsDto,
   type RoutePayload,
   type SaveMemoryInput,
   type SearchMemoryInput,
@@ -56,6 +74,8 @@ import {
 } from "@living-map/contracts";
 import {
   type Action,
+  acceptedFindingText,
+  acceptFinding,
   addDays,
   applyRouteChange,
   type Blocker,
@@ -65,21 +85,29 @@ import {
   closeAt,
   completeAction,
   computeReorder,
+  confirmPattern,
+  correctFinding,
   createAction,
   createCapture,
   createGoodLifeCondition,
   createIntention,
   createMemory,
+  createPatternCandidate,
   createPlan,
+  createPlanningRule,
   createProposal,
+  createReview,
+  createReviewFinding,
   createSeason,
   createStage,
+  deactivatePlanningRule,
   type EntityId,
   editAction,
   editGoodLifeCondition,
   editIntention,
   editStageTitle,
   type GoodLifeCondition,
+  growPatternCandidate,
   type Instant,
   type Intention,
   isAtVersion,
@@ -87,9 +115,16 @@ import {
   localDate,
   MAX_PENDING_PROPOSALS,
   type Memory,
+  type Pattern,
+  type PlanningRule,
   type Proposal,
+  REVIEW_AUTO_RETRY_ATTEMPTS,
+  type Review,
+  type ReviewFinding,
   type RouteChange,
   rankMemories,
+  rejectFinding,
+  rejectPattern,
   reopenAction,
   replacePlanOrder,
   resolveProposal,
@@ -123,10 +158,13 @@ import {
   type Clock,
   type IdGenerator,
   type ReadScope,
+  type ReviewEvidencePack,
+  type ReviewRunOutcome,
   SchemaConflictError,
   type Store,
   type WriteScope,
 } from "./ports";
+import { buildReviewEvidence, computeDueReviews } from "./review-evidence";
 
 export type ApplicationDeps = {
   store: Store;
@@ -147,7 +185,71 @@ const toStageDto = (stage: Stage): StageDto => ({ ...stage });
 const toBlockerDto = (blocker: Blocker | null) => (blocker ? { ...blocker } : null);
 const toActionDto = (action: Action): ActionDto => ({ ...action, blocker: toBlockerDto(action.blocker) });
 const toChangeLogEntryDto = (entry: ChangeLogEntry): ChangeLogEntryDto => ({ ...entry });
-const toMemoryDto = (m: Memory): MemoryDto => ({ ...m, linkedEntityIds: [...m.linkedEntityIds] });
+// sourceCaptureVerified (M-A) is internal Pattern-provenance bookkeeping, never exposed on the DTO.
+const toMemoryDto = (m: Memory): MemoryDto => ({
+  id: m.id,
+  type: m.type,
+  text: m.text,
+  sourceCaptureId: m.sourceCaptureId,
+  linkedEntityIds: [...m.linkedEntityIds],
+  createdBy: m.createdBy,
+  createdAt: m.createdAt,
+});
+const toReviewDto = (r: Review): ReviewDto => ({ ...r });
+
+/**
+ * The human-readable facts behind a finding's `evidenceRefs`, rebuilt live from the same deterministic
+ * `buildReviewEvidence` the AI/validation already use — never a second source of truth, never business
+ * logic duplicated in the renderer (M4 fix). A ref whose underlying record no longer exists (e.g. a
+ * `memory.forget`d Memory) is silently omitted rather than shown as a dangling id.
+ */
+const EVIDENCE_ITEM_GONE = "Этой записи больше нет — например, если её забыли.";
+function findingEvidenceItems(s: ReadScope, f: ReviewFinding): { id: string; text: string }[] {
+  const review = s.reviews.findById(f.reviewId);
+  // A missing review is a data-model impossibility here, not a "no evidence" case: keep the finding's
+  // own ref count faithful (below) rather than silently showing zero facts for something the Pattern
+  // engine still counts as evidence.
+  const byId = review ? new Map(buildReviewEvidence(s, review).items.map((i) => [i.id, i.text])) : new Map();
+  // One entry per cited ref, always — never fewer. A ref whose underlying record is gone (e.g. a
+  // `memory.forget`d Memory) still counted as evidence when this finding was created and still counts
+  // in the Pattern engine's independence check now: showing nothing here would let evidence silently
+  // disappear from the owner's view while it keeps counting behind the scenes (M4 faithfulness).
+  return f.evidenceRefs.map((ref) => ({ id: ref, text: byId.get(ref) ?? EVIDENCE_ITEM_GONE }));
+}
+const toReviewFindingDto = (s: ReadScope, f: ReviewFinding): ReviewFindingDto => ({
+  ...f,
+  evidenceRefs: [...f.evidenceRefs],
+  evidenceItems: findingEvidenceItems(s, f),
+});
+const toReviewWithFindingsDto = (s: ReadScope, review: Review): ReviewWithFindingsDto => ({
+  ...toReviewDto(review),
+  findings: s.reviewFindings.listByReview(review.id).map((f) => toReviewFindingDto(s, f)),
+});
+/**
+ * A Pattern candidate/confirmed/rejected row together with the concrete episodes behind it — the user
+ * must be able to see why the system thinks this repeats, not just a finding count (M4 fix).
+ */
+const toPatternDto = (s: ReadScope, p: Pattern): PatternDto => ({
+  ...p,
+  evidenceFindingIds: [...p.evidenceFindingIds],
+  supportingFindings: p.evidenceFindingIds.flatMap((id) => {
+    const f = s.reviewFindings.findById(id);
+    const review = f && s.reviews.findById(f.reviewId);
+    if (!f || !review) return [];
+    return [
+      {
+        id: f.id,
+        reviewId: f.reviewId,
+        reviewType: review.type,
+        periodStart: review.periodStart,
+        periodEnd: review.periodEnd,
+        text: acceptedFindingText(f) ?? f.text,
+        evidenceItems: findingEvidenceItems(s, f),
+      },
+    ];
+  }),
+});
+const toPlanningRuleDto = (r: PlanningRule): PlanningRuleDto => ({ ...r });
 
 const FORGOTTEN_REPLY = "Этого больше нет в памяти.";
 
@@ -258,7 +360,20 @@ export function createApplication(deps: ApplicationDeps) {
       needsAiReplan,
       calendarSnapshot,
       execution: execution(s, currentAction?.actionId ?? null, now),
+      reviewInbox: reviewInbox(s),
     };
+  }
+
+  /** Compact «Разборы» nav badge (Stage 7): counts only, never the full list. */
+  function reviewInbox(s: Pick<ReadScope, "reviews" | "reviewFindings" | "patterns">): ReviewInboxDto {
+    // "Ready" alone would never clear: a Review stays `ready` forever even after every finding is
+    // resolved. The badge means "waits for you", so only a still-`proposed` finding counts.
+    const readyReviews = s.reviews
+      .listRecent(200)
+      .filter(
+        (r) => r.status === "ready" && s.reviewFindings.listByReview(r.id).some((f) => f.status === "proposed"),
+      ).length;
+    return { readyReviews, patternCandidates: s.patterns.listCandidates(200).length };
   }
 
   /** The Action really being worked on — it pins `Сейчас`; a silent interval (unnoticed sleep) does not. */
@@ -476,6 +591,109 @@ export function createApplication(deps: ApplicationDeps) {
     return ok("applied");
   }
 
+  /**
+   * Fact evidence → repeated accepted evidence → Pattern candidate (this stage's prompt §14–16).
+   * Runs after a finding is accepted/corrected — a rejected finding never reaches here at all.
+   */
+  function maybeSurfacePatternCandidate(s: WriteScope, finding: ReviewFinding): void {
+    const patternKey = finding.patternKey;
+    if (!patternKey) return;
+    const evidence = s.reviewFindings.listAcceptedByPatternKey(patternKey);
+    // A single episode must never become a candidate, and review periods overlap by design (a day sits
+    // inside its week/season/year): two Reviews can each cite the very same underlying fact(s) — even
+    // under DIFFERENT evidence-ref spellings (a work interval cited directly by a daily finding and
+    // aggregated into a `worktotal:` by a weekly one; a Capture and a Memory explicitly derived from
+    // it). Comparing raw ref strings therefore is not enough — comparing canonical `evidenceFactIds`
+    // (H2 fix) is.
+    //
+    // "Each review cites at least one fact no other review also cites" is NOT enough on its own: an
+    // aggregate (`worktotal:`) can legitimately fold in several unrelated intervals from the same
+    // period, so a daily and a weekly review can share the one fact that is actually the episode while
+    // each still happens to have some OTHER, thematically irrelevant fact that makes it look "unique".
+    // The only safe requirement is that at least two contributing Reviews' fact-id sets are PAIRWISE
+    // DISJOINT — zero facts in common between that pair, not just "not identical" — a genuinely
+    // independent episode, never a re-citation of someone else's under any spelling (this stage's §14).
+    const factIdsByReview = new Map<string, Set<string>>();
+    for (const f of evidence) {
+      const set = factIdsByReview.get(f.reviewId) ?? new Set<string>();
+      for (const factId of f.evidenceFactIds) set.add(factId);
+      factIdsByReview.set(f.reviewId, set);
+    }
+    const reviewIds = [...factIdsByReview.keys()];
+    const disjoint = (a: string, b: string): boolean => {
+      const setA = factIdsByReview.get(a) as Set<string>;
+      const setB = factIdsByReview.get(b) as Set<string>;
+      // An empty fact set means unknown provenance (e.g. a pre-H2 row, migration default '[]'), not a
+      // proven-independent one — treating it as vacuously disjoint from everything would let it "prove"
+      // independence from any other review. Unknown provenance can never establish independence.
+      if (setA.size === 0 || setB.size === 0) return false;
+      for (const factId of setA) if (setB.has(factId)) return false;
+      return true;
+    };
+    /** Any two reviews (subject to `filter`) with zero facts in common. */
+    const hasDisjointPair = (filter?: (a: string, b: string) => boolean): boolean => {
+      for (let i = 0; i < reviewIds.length; i++) {
+        for (let j = i + 1; j < reviewIds.length; j++) {
+          const a = reviewIds[i] as string;
+          const b = reviewIds[j] as string;
+          if ((!filter || filter(a, b)) && disjoint(a, b)) return true;
+        }
+      }
+      return false;
+    };
+    if (!hasDisjointPair()) return;
+    const evidenceFindingIds = evidence.map((f) => f.id);
+    const now = clock.now();
+
+    // At most one non-rejected Pattern exists per key at a time (this stage's prompt §15).
+    const existing = s.patterns.findByKey(patternKey);
+    if (existing?.status === "confirmed") return; // already an active rule for this theme
+    if (existing?.status === "candidate") {
+      if (existing.evidenceFindingIds.length >= evidenceFindingIds.length) return; // nothing new to add
+      const grown = growPatternCandidate(existing, evidenceFindingIds, now);
+      if (!grown.ok || !s.patterns.growIfCandidate(grown.value)) return;
+      s.recordChange({
+        commandType: "pattern.candidate",
+        entityType: "pattern",
+        entityId: grown.value.id,
+        summary: `${evidenceFindingIds.length} evidence`,
+      });
+      return;
+    }
+    if (existing?.status === "rejected") {
+      // Resurrection needs a genuinely NEW fact, not just a Review row the owner hadn't rejected by id
+      // yet — a Review can be "new" while only re-citing a fact that was already part of what the owner
+      // rejected (same fact, different evidence-ref spelling or a different Review). Compare against the
+      // rejected FACT set, not the rejected REVIEW set.
+      const rejectedFacts = new Set<string>();
+      for (const f of evidence) {
+        if (existing.evidenceFindingIds.includes(f.id)) {
+          for (const factId of f.evidenceFactIds) rejectedFacts.add(factId);
+        }
+      }
+      const hasNewFact = (reviewId: string): boolean => {
+        for (const factId of factIdsByReview.get(reviewId) ?? []) if (!rejectedFacts.has(factId)) return true;
+        return false;
+      };
+      if (!hasDisjointPair((a, b) => hasNewFact(a) || hasNewFact(b))) return;
+    }
+    const created = createPatternCandidate({
+      id: ids.next(),
+      patternKey,
+      text: acceptedFindingText(finding) ?? finding.text,
+      evidenceFindingIds,
+      now,
+    });
+    if (!created.ok) return;
+    s.patterns.insert(created.value);
+    s.recordChange({
+      commandType: "pattern.candidate",
+      entityType: "pattern",
+      entityId: created.value.id,
+      summary: `${evidenceFindingIds.length} evidence`,
+    });
+  }
+
   return {
     newContext: (actor: Actor, source: CommandSource): CommandContext =>
       createCommandContext({ clock, ids }, actor, source),
@@ -512,6 +730,7 @@ export function createApplication(deps: ApplicationDeps) {
               meanings: PLANNING_MEANINGS,
               ...currentView(s),
               recentHistory: s.changeLog.listRecent(30).map(toChangeLogEntryDto),
+              activePlanningRules: s.planningRules.listActive().map(toPlanningRuleDto),
             })),
           ),
         ),
@@ -548,6 +767,37 @@ export function createApplication(deps: ApplicationDeps) {
             ),
           ),
         ),
+
+      /** Reviews (Stage 7), newest first. Desktop only — never reachable from MCP. */
+      listReviews: (input: ListReviewsInput): Result<ReviewDto[]> =>
+        guarded("listReviews", () => ok(store.read((s) => s.reviews.listRecent(input.limit)).map(toReviewDto))),
+
+      getReview: (input: GetReviewInput): Result<ReviewWithFindingsDto> =>
+        guarded("getReview", () =>
+          store.read((s) => {
+            const review = s.reviews.findById(input.id);
+            return review ? ok(toReviewWithFindingsDto(s, review)) : err("NOT_FOUND", "Review not found");
+          }),
+        ),
+
+      listPatternCandidates: (input: ListPatternCandidatesInput): Result<PatternDto[]> =>
+        guarded("listPatternCandidates", () =>
+          ok(store.read((s) => s.patterns.listCandidates(input.limit).map((p) => toPatternDto(s, p)))),
+        ),
+
+      listPlanningRules: (input: ListPlanningRulesInput): Result<PlanningRuleDto[]> =>
+        guarded("listPlanningRules", () =>
+          ok(store.read((s) => s.planningRules.listAll(input.limit)).map(toPlanningRuleDto)),
+        ),
+
+      /** The evidence pack for a claimed Review — the closed set of facts the AI may cite (§21). Desktop processor only. */
+      getReviewEvidence: (input: { id: string }): Result<ReviewEvidencePack> =>
+        guarded("getReviewEvidence", () =>
+          store.read((s) => {
+            const review = s.reviews.findById(input.id);
+            return review ? ok(buildReviewEvidence(s, review)) : err("NOT_FOUND", "Review not found");
+          }),
+        ),
     },
 
     commands: {
@@ -583,8 +833,12 @@ export function createApplication(deps: ApplicationDeps) {
             if (!s.season.updateIfVersion(updated.value, input.expectedVersion)) {
               return err("CONFLICT_RELOAD", "Season changed concurrently; reload and retry");
             }
+            // A wording edit and an actual season change are recorded under different commandTypes
+            // (M2 fix): only `season.changeSeason` is a seasonal-Review boundary (`SEASON_COMMANDS`,
+            // review-evidence.ts) — the owner says which this is, since the system cannot reliably
+            // infer "still the same stretch of life, reworded" from "the season actually turned".
             s.recordChange({
-              commandType: "season.updateFocus",
+              commandType: input.startsNewSeason ? "season.changeSeason" : "season.updateFocus",
               entityType: "season",
               entityId: current.id,
               summary: `v${current.version}→v${updated.value.version}`,
@@ -1193,6 +1447,10 @@ export function createApplication(deps: ApplicationDeps) {
               entityType: "plan",
               entityId: plan.id,
               summary: `v${plan.version}→v${next.value.version}`,
+              // mcp-ai's SAFE WRITE reorder is the AI acting on a Capture's news (H-A fix): without this
+              // link, the reorder's changelog line and the Capture that prompted it are the same lived
+              // episode under two unrelated evidence ids.
+              sourceCaptureId: ctx.captureId ?? null,
             });
             return ok(toPlanDto(next.value));
           }),
@@ -1449,8 +1707,12 @@ export function createApplication(deps: ApplicationDeps) {
         authorize("memory.save", ctx) ??
         guarded("saveMemory", () =>
           transact(ctx, (s): Result<MemoryDto> => {
-            // The run's own Capture (from its context) wins over the id the AI passed.
+            // The run's own Capture (from its trusted context) wins over the id the AI passed. Only
+            // ctx.captureId proves this Memory came from that Capture's own processing job — an AI-
+            // supplied captureId from any other session (e.g. interactive Desktop-chat, ADR-0004) is
+            // still a real Stage-6 association, but not verified provenance for Pattern purposes (M-A).
             const captureId = ctx.captureId ?? input.captureId;
+            const sourceCaptureVerified = ctx.captureId !== undefined;
             if (captureId && !s.captures.findById(captureId)) return err("NOT_FOUND", "Capture not found");
             const missing = input.linkedEntityIds.find(
               (id) =>
@@ -1465,6 +1727,7 @@ export function createApplication(deps: ApplicationDeps) {
               type: input.type,
               text: input.text,
               sourceCaptureId: captureId,
+              sourceCaptureVerified,
               linkedEntityIds: input.linkedEntityIds,
               createdBy: ctx.actor,
               now: clock.now(),
@@ -1474,7 +1737,24 @@ export function createApplication(deps: ApplicationDeps) {
             // a Capture holding two ideas keeps the first — key by content if that ever matters.
             const same =
               captureId && s.memories.listBySourceCaptures([captureId]).find((m) => m.type === created.value.type);
-            if (same) return ok(toMemoryDto(same));
+            if (same) {
+              // This run's own trusted context just vouched for exactly this Capture+type: upgrade the
+              // existing (possibly untethered-session-created, unverified) row rather than silently
+              // discarding the trusted job's provenance (M-A). Every row mutation must record a change
+              // (ARCHITECTURE §44) — a distinct "memory.verify" type, not "memory.save", so this
+              // bookkeeping-only upgrade never shows up as a second "AI saved a memory" in the user's
+              // history feed (it is excluded the same way as capture.claim/review.claim etc., below).
+              if (sourceCaptureVerified && !same.sourceCaptureVerified) {
+                s.memories.verifySourceCapture(same.id);
+                s.recordChange({
+                  commandType: "memory.verify",
+                  entityType: "memory",
+                  entityId: same.id,
+                  summary: same.type,
+                });
+              }
+              return ok(toMemoryDto(same));
+            }
             s.memories.insert(created.value);
             s.recordChange({
               commandType: "memory.save",
@@ -1497,6 +1777,320 @@ export function createApplication(deps: ApplicationDeps) {
             if (!s.memories.remove(input.id)) return err("NOT_FOUND", "Memory not found");
             s.recordChange({ commandType: "memory.forget", entityType: "memory", entityId: input.id, summary: "" });
             return ok(null);
+          }),
+        ),
+
+      /**
+       * Desktop launch/scheduler only (system): creates a `needs_ai` Review row for every currently
+       * due period (this stage's prompt §9/§10) that does not already have one. Cheap date math + row
+       * inserts — the potentially slow part (AI processing) happens later, one Review at a time, via
+       * claimNextReview/finishReview, exactly like the Capture queue.
+       */
+      scheduleDueReviews: (ctx: CommandContext, input: { timeZone: string }): Result<number> =>
+        authorize("review.schedule", ctx) ??
+        guarded("scheduleDueReviews", () =>
+          transact(ctx, (s): Result<number> => {
+            const now = clock.now();
+            const due = computeDueReviews(s, now, input.timeZone).filter(
+              (p) => !s.reviews.existsForPeriod(p.type, p.periodStart, p.periodEnd),
+            );
+            for (const period of due) {
+              const created = createReview({ id: ids.next(), timeZone: input.timeZone, now, ...period });
+              if (!created.ok) continue; // defensive; the scheduler never produces an invalid period
+              s.reviews.insert(created.value);
+              s.recordChange({
+                commandType: "review.due",
+                entityType: "review",
+                entityId: created.value.id,
+                summary: created.value.type,
+              });
+            }
+            return ok(due.length);
+          }),
+        ),
+
+      /** Desktop processor only: atomically takes the oldest `needs_ai` Review (needs_ai → processing). */
+      claimNextReview: (ctx: CommandContext): Result<ReviewDto | null> =>
+        authorize("review.process", ctx) ??
+        guarded("claimNextReview", () =>
+          transact(ctx, (s): Result<ReviewDto | null> => {
+            const next = s.reviews.findNextPending();
+            if (!next || !s.reviews.claim(next.id, clock.now())) return ok(null);
+            s.recordChange({
+              commandType: "review.claim",
+              entityType: "review",
+              entityId: next.id,
+              summary: `attempt ${next.attempts + 1}`,
+            });
+            return ok(toReviewDto(s.reviews.findById(next.id) as Review));
+          }),
+        ),
+
+      /**
+       * Desktop processor only: records the AI outcome of a claimed Review. Evidence is re-validated
+       * against a freshly rebuilt pack (never trusted from the AI) — any evidenceRef outside that
+       * closed set, or any other malformed shape, fails the whole result: no partial findings are
+       * ever written (this stage's prompt §20/§21).
+       */
+      finishReview: (
+        ctx: CommandContext,
+        input: { id: string; outcome: ReviewRunOutcome },
+      ): Result<ReviewWithFindingsDto> =>
+        authorize("review.process", ctx) ??
+        guarded("finishReview", () =>
+          transact(ctx, (s): Result<ReviewWithFindingsDto> => {
+            const review = s.reviews.findById(input.id);
+            if (!review) return err("NOT_FOUND", "Review not found");
+            const now = clock.now();
+
+            const fail = (lastError: string): Result<ReviewWithFindingsDto> => {
+              if (!s.reviews.finish(input.id, { lastError }, now))
+                return err("CONFLICT_RELOAD", "Review is not being processed");
+              s.recordChange({
+                commandType: "review.failed",
+                entityType: "review",
+                entityId: input.id,
+                summary: lastError,
+              });
+              return ok(toReviewWithFindingsDto(s, s.reviews.findById(input.id) as Review));
+            };
+
+            if (!input.outcome.ok) return fail(AiFailureSchema.catch("failed").parse(input.outcome.failure));
+
+            const parsed = ReviewAiResultSchema.safeParse(input.outcome.result);
+            if (!parsed.success) return fail("malformed");
+
+            if (parsed.data.kind === "no_useful_change") {
+              if (!s.reviews.finish(input.id, { status: "no_useful_change" }, now)) {
+                return err("CONFLICT_RELOAD", "Review is not being processed");
+              }
+              s.recordChange({
+                commandType: "review.processed",
+                entityType: "review",
+                entityId: input.id,
+                summary: "no_useful_change",
+              });
+              return ok(toReviewWithFindingsDto(s, s.reviews.findById(input.id) as Review));
+            }
+
+            const evidenceItems = buildReviewEvidence(s, review).items;
+            const validIds = new Set(evidenceItems.map((i) => i.id));
+            const factIdsByRef = new Map(evidenceItems.map((i) => [i.id, i.factIds]));
+            const built: ReviewFinding[] = [];
+            for (const draft of parsed.data.findings) {
+              if (draft.evidenceRefs.some((ref) => !validIds.has(ref))) return fail("malformed"); // fabricated/nonexistent reference
+              const created = createReviewFinding({
+                id: ids.next(),
+                reviewId: review.id,
+                text: draft.text,
+                evidenceRefs: draft.evidenceRefs,
+                // Canonical underlying-fact identity behind the cited refs (H2 fix) — resolved here,
+                // once, from the same pack evidenceRefs were just validated against; never trusted from
+                // the AI, which never sees factIds at all.
+                evidenceFactIds: draft.evidenceRefs.flatMap((ref) => factIdsByRef.get(ref) ?? []),
+                suggestion: draft.suggestion,
+                patternKey: draft.patternKey,
+                now,
+              });
+              if (!created.ok) return fail("malformed");
+              built.push(created.value);
+            }
+            for (const finding of built) {
+              s.reviewFindings.insert(finding);
+              s.recordChange({
+                commandType: "review.findingCreated",
+                entityType: "review_finding",
+                entityId: finding.id,
+                summary: finding.patternKey ?? "",
+              });
+            }
+            if (!s.reviews.finish(input.id, { status: "ready" }, now)) {
+              return err("CONFLICT_RELOAD", "Review is not being processed");
+            }
+            s.recordChange({
+              commandType: "review.processed",
+              entityType: "review",
+              entityId: input.id,
+              summary: "ready",
+            });
+            return ok(toReviewWithFindingsDto(s, s.reviews.findById(input.id) as Review));
+          }),
+        ),
+
+      /** Desktop launch only: an interrupted `processing` and a not-yet-exhausted `failed` wait again. */
+      recoverReviews: (ctx: CommandContext): Result<number> =>
+        authorize("review.process", ctx) ??
+        guarded("recoverReviews", () =>
+          transact(ctx, (s): Result<number> => {
+            const changed = s.reviews.recover(REVIEW_AUTO_RETRY_ATTEMPTS, clock.now());
+            if (changed > 0) {
+              s.recordChange({
+                commandType: "review.recover",
+                entityType: "review",
+                entityId: "all",
+                summary: `${changed}`,
+              });
+            }
+            return ok(changed);
+          }),
+        ),
+
+      /** «Повторить»: a failed Review waits for the AI again. */
+      retryReview: (ctx: CommandContext, input: RetryReviewInput): Result<ReviewDto> =>
+        authorize("review.retry", ctx) ??
+        guarded("retryReview", () =>
+          transact(ctx, (s): Result<ReviewDto> => {
+            if (!s.reviews.findById(input.id)) return err("NOT_FOUND", "Review not found");
+            if (!s.reviews.requeue(input.id, clock.now()))
+              return err("CONFLICT_RELOAD", "Review is not waiting for a retry; reload");
+            s.recordChange({ commandType: "review.retry", entityType: "review", entityId: input.id, summary: "retry" });
+            return ok(toReviewDto(s.reviews.findById(input.id) as Review));
+          }),
+        ),
+
+      /** «Всё верно»: the AI's draft finding is accepted as is. */
+      acceptReviewFinding: (ctx: CommandContext, input: AcceptReviewFindingInput): Result<ReviewFindingDto> =>
+        authorize("reviewFinding.accept", ctx) ??
+        guarded("acceptReviewFinding", () =>
+          transact(ctx, (s): Result<ReviewFindingDto> => {
+            const current = s.reviewFindings.findById(input.id);
+            if (!current) return err("NOT_FOUND", "Finding not found");
+            const accepted = acceptFinding(current, clock.now());
+            if (!accepted.ok) return err("CONFLICT_RELOAD", `${accepted.reason}; reload`);
+            if (!s.reviewFindings.resolveIfProposed(accepted.value)) {
+              return err("CONFLICT_RELOAD", "Finding changed concurrently; reload and retry");
+            }
+            s.recordChange({
+              commandType: "reviewFinding.accept",
+              entityType: "review_finding",
+              entityId: current.id,
+              summary: "",
+            });
+            maybeSurfacePatternCandidate(s, accepted.value);
+            return ok(toReviewFindingDto(s, accepted.value));
+          }),
+        ),
+
+      /** The user's correction becomes the accepted learning; the AI's original draft stays intact. */
+      correctReviewFinding: (ctx: CommandContext, input: CorrectReviewFindingInput): Result<ReviewFindingDto> =>
+        authorize("reviewFinding.correct", ctx) ??
+        guarded("correctReviewFinding", () =>
+          transact(ctx, (s): Result<ReviewFindingDto> => {
+            const current = s.reviewFindings.findById(input.id);
+            if (!current) return err("NOT_FOUND", "Finding not found");
+            const corrected = correctFinding(current, input.text, input.keepPattern, clock.now());
+            if (!corrected.ok)
+              return err(
+                corrected.reason.includes("already") ? "CONFLICT_RELOAD" : "VALIDATION_ERROR",
+                corrected.reason,
+              );
+            if (!s.reviewFindings.resolveIfProposed(corrected.value)) {
+              return err("CONFLICT_RELOAD", "Finding changed concurrently; reload and retry");
+            }
+            s.recordChange({
+              commandType: "reviewFinding.correct",
+              entityType: "review_finding",
+              entityId: current.id,
+              summary: input.keepPattern ? "keepPattern" : "",
+            });
+            maybeSurfacePatternCandidate(s, corrected.value);
+            return ok(toReviewFindingDto(s, corrected.value));
+          }),
+        ),
+
+      /** Ignore: never becomes Pattern evidence. */
+      rejectReviewFinding: (ctx: CommandContext, input: RejectReviewFindingInput): Result<ReviewFindingDto> =>
+        authorize("reviewFinding.reject", ctx) ??
+        guarded("rejectReviewFinding", () =>
+          transact(ctx, (s): Result<ReviewFindingDto> => {
+            const current = s.reviewFindings.findById(input.id);
+            if (!current) return err("NOT_FOUND", "Finding not found");
+            const rejected = rejectFinding(current, clock.now());
+            if (!rejected.ok) return err("CONFLICT_RELOAD", `${rejected.reason}; reload`);
+            if (!s.reviewFindings.resolveIfProposed(rejected.value)) {
+              return err("CONFLICT_RELOAD", "Finding changed concurrently; reload and retry");
+            }
+            s.recordChange({
+              commandType: "reviewFinding.reject",
+              entityType: "review_finding",
+              entityId: current.id,
+              summary: "",
+            });
+            return ok(toReviewFindingDto(s, rejected.value));
+          }),
+        ),
+
+      /** «Сделать правилом»: confirms the candidate AND activates its PlanningRule, atomically. AI/MCP has no path here. */
+      confirmPattern: (ctx: CommandContext, input: ConfirmPatternInput): Result<PatternDto> =>
+        authorize("pattern.confirm", ctx) ??
+        guarded("confirmPattern", () =>
+          transact(ctx, (s): Result<PatternDto> => {
+            const current = s.patterns.findById(input.id);
+            if (!current) return err("NOT_FOUND", "Pattern not found");
+            const confirmed = confirmPattern(current, ctx.actor, clock.now());
+            if (!confirmed.ok) return err("CONFLICT_RELOAD", `${confirmed.reason}; reload`);
+            if (!s.patterns.resolveIfCandidate(confirmed.value)) {
+              return err("CONFLICT_RELOAD", "Pattern changed concurrently; reload and retry");
+            }
+            s.recordChange({
+              commandType: "pattern.confirm",
+              entityType: "pattern",
+              entityId: current.id,
+              summary: "",
+            });
+            const rule = createPlanningRule({
+              id: ids.next(),
+              text: confirmed.value.text,
+              sourcePatternId: confirmed.value.id,
+              now: clock.now(),
+            });
+            s.planningRules.insert(rule);
+            s.recordChange({
+              commandType: "planningRule.activate",
+              entityType: "planning_rule",
+              entityId: rule.id,
+              summary: "",
+            });
+            return ok(toPatternDto(s, confirmed.value));
+          }),
+        ),
+
+      /** «Не считать правилом». New later evidence may still justify a fresh candidate. */
+      rejectPattern: (ctx: CommandContext, input: RejectPatternInput): Result<PatternDto> =>
+        authorize("pattern.reject", ctx) ??
+        guarded("rejectPattern", () =>
+          transact(ctx, (s): Result<PatternDto> => {
+            const current = s.patterns.findById(input.id);
+            if (!current) return err("NOT_FOUND", "Pattern not found");
+            const rejected = rejectPattern(current, ctx.actor, clock.now());
+            if (!rejected.ok) return err("CONFLICT_RELOAD", `${rejected.reason}; reload`);
+            if (!s.patterns.resolveIfCandidate(rejected.value)) {
+              return err("CONFLICT_RELOAD", "Pattern changed concurrently; reload and retry");
+            }
+            s.recordChange({ commandType: "pattern.reject", entityType: "pattern", entityId: current.id, summary: "" });
+            return ok(toPatternDto(s, rejected.value));
+          }),
+        ),
+
+      /** The user can deactivate an active rule at any time; excluded from planning context from then on. */
+      deactivatePlanningRule: (ctx: CommandContext, input: DeactivatePlanningRuleInput): Result<PlanningRuleDto> =>
+        authorize("planningRule.deactivate", ctx) ??
+        guarded("deactivatePlanningRule", () =>
+          transact(ctx, (s): Result<PlanningRuleDto> => {
+            const current = s.planningRules.findById(input.id);
+            if (!current) return err("NOT_FOUND", "Planning rule not found");
+            const deactivated = deactivatePlanningRule(current, clock.now());
+            if (!deactivated.ok) return err("CONFLICT_RELOAD", `${deactivated.reason}; reload`);
+            if (!s.planningRules.deactivateIfActive(deactivated.value)) {
+              return err("CONFLICT_RELOAD", "Planning rule changed concurrently; reload and retry");
+            }
+            s.recordChange({
+              commandType: "planningRule.deactivate",
+              entityType: "planning_rule",
+              entityId: current.id,
+              summary: "",
+            });
+            return ok(toPlanningRuleDto(deactivated.value));
           }),
         ),
     },

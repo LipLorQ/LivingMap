@@ -60,6 +60,7 @@ describe("manual backup + restore (mandatory Stage 1 integration test)", () => {
     const updated = app.commands.updateSeasonFocus(app.newContext("user-ui", "test"), {
       expectedVersion: 1,
       focus: "state B",
+      startsNewSeason: false,
     });
     expect(updated.ok).toBe(true);
     expect(app.queries.getSeason()).toMatchObject({ value: { focus: "state B" } });
@@ -104,6 +105,7 @@ describe("manual backup + restore (mandatory Stage 1 integration test)", () => {
     const updated = app.commands.updateSeasonFocus(app.newContext("user-ui", "test"), {
       expectedVersion: 1,
       focus: "state B",
+      startsNewSeason: false,
     });
     if (!updated.ok) throw new Error(updated.error.message);
     h.close();

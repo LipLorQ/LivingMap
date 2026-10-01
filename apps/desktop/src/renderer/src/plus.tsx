@@ -1,7 +1,7 @@
 import type { AiFailure, CaptureDto } from "@living-map/contracts";
 import { useEffect, useRef, useState } from "react";
 
-const FAILURE_TEXT: Record<AiFailure, string> = {
+export const FAILURE_TEXT: Record<AiFailure, string> = {
   not_installed: "На этом компьютере не найден Claude Code — установи его и войди в аккаунт.",
   not_authenticated: "ИИ не авторизован — открой Claude Code и войди в аккаунт claude.ai.",
   rate_limited: "Лимит ИИ по подписке исчерпан — попробуй позже.",

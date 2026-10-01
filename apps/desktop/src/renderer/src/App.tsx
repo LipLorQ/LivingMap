@@ -16,8 +16,9 @@ import { MemoryPanel } from "./memory";
 import { NowScreen } from "./now-screen";
 import { PlusPanel } from "./plus";
 import { PlanSection, ProposalsSection, STALE_PROPOSAL_TEXT } from "./proposals";
+import { ReviewsPanel } from "./reviews";
 
-type Tab = "now" | "editor" | "memory";
+type Tab = "now" | "editor" | "memory" | "reviews";
 
 // Stage 4: "Сейчас" is the default screen (execution interface); the previous utilitarian
 // editing screen moves behind a "Замысел" tab (direct editing / fallback, per Stage 4 §15).
@@ -109,6 +110,20 @@ export function App() {
           >
             Память
           </button>
+          <button
+            type="button"
+            data-testid="nav-reviews"
+            aria-current={tab === "reviews"}
+            className={tab === "reviews" ? "font-semibold underline" : ""}
+            onClick={() => setTab("reviews")}
+          >
+            Разборы
+            {(view.reviewInbox.readyReviews > 0 || view.reviewInbox.patternCandidates > 0) && (
+              <span data-testid="reviews-badge" className="ml-1 rounded-full bg-violet-600 px-1.5 text-xs text-white">
+                {view.reviewInbox.readyReviews + view.reviewInbox.patternCandidates}
+              </span>
+            )}
+          </button>
         </nav>
       </header>
 
@@ -138,6 +153,18 @@ export function App() {
 
       {tab === "memory" ? (
         <MemoryPanel onForget={(id) => run(window.livingMap.commands.forgetMemory({ id }))} />
+      ) : tab === "reviews" ? (
+        <ReviewsPanel
+          onRetry={(id) => run(window.livingMap.commands.retryReview({ id }))}
+          onAcceptFinding={(id) => run(window.livingMap.commands.acceptReviewFinding({ id }))}
+          onCorrectFinding={(id, text, keepPattern) =>
+            run(window.livingMap.commands.correctReviewFinding({ id, text, keepPattern }))
+          }
+          onRejectFinding={(id) => run(window.livingMap.commands.rejectReviewFinding({ id }))}
+          onConfirmPattern={(id) => run(window.livingMap.commands.confirmPattern({ id }))}
+          onRejectPattern={(id) => run(window.livingMap.commands.rejectPattern({ id }))}
+          onDeactivateRule={(id) => run(window.livingMap.commands.deactivatePlanningRule({ id }))}
+        />
       ) : tab === "now" ? (
         <NowScreen
           view={view}
@@ -162,8 +189,8 @@ export function App() {
           <SeasonSection
             season={view.season}
             onCreate={(focus) => run(window.livingMap.commands.createSeason({ focus }))}
-            onUpdate={(expectedVersion, focus) =>
-              run(window.livingMap.commands.updateSeasonFocus({ expectedVersion, focus }))
+            onUpdate={(expectedVersion, focus, startsNewSeason) =>
+              run(window.livingMap.commands.updateSeasonFocus({ expectedVersion, focus, startsNewSeason }))
             }
           />
 
@@ -250,6 +277,7 @@ function translateErrorCode(code: AppError["code"]): string {
 const HISTORY_LABELS: Record<string, string> = {
   "season.create": "Задан фокус сезона",
   "season.updateFocus": "Изменён фокус сезона",
+  "season.changeSeason": "Начат новый сезон",
   "goodLifeCondition.add": "Добавлено ограничение: чем пользователь не хочет жертвовать",
   "goodLifeCondition.edit": "Изменено ограничение",
   "goodLifeCondition.remove": "Удалено ограничение",
@@ -280,6 +308,18 @@ const HISTORY_LABELS: Record<string, string> = {
   "capture.processed": "ИИ разобрал запись «+»",
   "memory.save": "ИИ сохранил в память",
   "memory.forget": "Удалено из памяти",
+  "review.due": "Готов новый разбор",
+  "review.processed": "ИИ разобрал период",
+  "review.retry": "Разбор снова ждёт ИИ",
+  "review.findingCreated": "ИИ нашёл, что учесть",
+  "reviewFinding.accept": "Находка подтверждена",
+  "reviewFinding.correct": "Находка исправлена",
+  "reviewFinding.reject": "Находка проигнорирована",
+  "pattern.candidate": "Похоже, что-то повторяется",
+  "pattern.confirm": "Закономерность стала правилом",
+  "pattern.reject": "Закономерность не признана правилом",
+  "planningRule.activate": "Правило планирования включено",
+  "planningRule.deactivate": "Правило планирования отключено",
 };
 
 const PROPOSAL_KIND_LABELS: Record<string, string> = {
@@ -363,9 +403,10 @@ function SeasonSection({
 }: {
   season: SeasonDto | null;
   onCreate: (focus: string) => void;
-  onUpdate: (expectedVersion: number, focus: string) => void;
+  onUpdate: (expectedVersion: number, focus: string, startsNewSeason: boolean) => void;
 }) {
   const [draft, setDraft] = useState(season?.focus ?? "");
+  const [startsNewSeason, setStartsNewSeason] = useState(false);
   useEffect(() => setDraft(season?.focus ?? ""), [season?.focus]);
   return (
     <section data-testid="season" className="space-y-1 rounded border p-3">
@@ -377,11 +418,26 @@ function SeasonSection({
         onChange={(e) => setDraft(e.target.value)}
         rows={2}
       />
+      {season && (
+        <label className="flex items-center gap-2 text-xs text-neutral-600">
+          <input
+            type="checkbox"
+            data-testid="season-starts-new"
+            checked={startsNewSeason}
+            onChange={(e) => setStartsNewSeason(e.target.checked)}
+          />
+          Это смена сезона, а не просто уточнение формулировки
+        </label>
+      )}
       <button
         type="button"
         data-testid="season-save"
         className="rounded border px-2 py-0.5"
-        onClick={() => (season ? onUpdate(season.version, draft) : onCreate(draft))}
+        onClick={() => {
+          if (season) onUpdate(season.version, draft, startsNewSeason);
+          else onCreate(draft);
+          setStartsNewSeason(false);
+        }}
       >
         Сохранить фокус
       </button>
