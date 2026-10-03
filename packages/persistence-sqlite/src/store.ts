@@ -6,8 +6,14 @@ import type {
   CaptureReader,
   CaptureRepository,
   ChangeLogReader,
+  CourseChangeReader,
+  CourseChangeRepository,
+  DecadePlanReader,
+  DecadePlanRepository,
   GoodLifeConditionReader,
   GoodLifeConditionRepository,
+  HorizonReader,
+  HorizonRepository,
   IdGenerator,
   IntentionReader,
   IntentionRepository,
@@ -25,6 +31,10 @@ import type {
   ReviewFindingRepository,
   ReviewReader,
   ReviewRepository,
+  RoutineReader,
+  RoutineRepository,
+  SeasonHistoryReader,
+  SeasonHistoryRepository,
   SeasonReader,
   SeasonRepository,
   SettingsReader,
@@ -34,6 +44,8 @@ import type {
   Store,
   WorkIntervalReader,
   WorkIntervalRepository,
+  YearDirectionReader,
+  YearDirectionRepository,
 } from "@living-map/application";
 import { SchemaConflictError } from "@living-map/application";
 import type { CalendarSnapshotDto } from "@living-map/contracts";
@@ -43,9 +55,13 @@ import {
   acceptedFindingText,
   type Capture,
   type CaptureState,
+  type CourseChange,
+  type CourseLevel,
+  type DecadePlanItem,
   type GoodLifeCondition,
   type Instant,
   type Intention,
+  type IntentionStatus,
   type Memory,
   type MemoryType,
   type Pattern,
@@ -60,8 +76,13 @@ import {
   type ReviewFindingStatus,
   type ReviewStatus,
   type ReviewType,
+  type RoutineItem,
+  type RoutineKind,
   type Season,
+  type SeasonHistoryEntry,
   type Stage,
+  type ThreeYearHorizon,
+  type YearDirection,
 } from "@living-map/domain";
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 import type { SQLiteUpdateSetSource } from "drizzle-orm/sqlite-core";
@@ -72,6 +93,8 @@ import {
   calendarSnapshot,
   captures,
   changeLog,
+  courseChanges,
+  decadePlanItems,
   goodLifeConditions,
   intentions,
   memories,
@@ -82,10 +105,14 @@ import {
   proposals,
   reviewFindings,
   reviews,
+  routineItems,
   season,
+  seasonHistory,
   settings,
   stages,
+  threeYearHorizon,
   workIntervals,
+  yearDirection,
 } from "./schema";
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
@@ -136,8 +163,194 @@ function seasonRepository(q: Tx): SeasonRepository {
     updateIfVersion: (s, expectedVersion) =>
       q
         .update(season)
-        .set({ focus: s.focus, version: s.version, updatedAt: s.updatedAt })
+        .set({
+          focus: s.focus,
+          whyItMatters: s.whyItMatters,
+          startedAt: s.startedAt,
+          version: s.version,
+          updatedAt: s.updatedAt,
+        })
         .where(and(eq(season.id, s.id), eq(season.version, expectedVersion)))
+        .run().changes === 1,
+  };
+}
+
+function seasonHistoryReader(q: Tx): SeasonHistoryReader {
+  return { list: () => q.select().from(seasonHistory).orderBy(desc(seasonHistory.endedAt), desc(sql`rowid`)).all() };
+}
+
+function seasonHistoryRepository(q: Tx): SeasonHistoryRepository {
+  return { ...seasonHistoryReader(q), insert: (e: SeasonHistoryEntry) => void q.insert(seasonHistory).values(e).run() };
+}
+
+function decadePlanReader(q: Tx): DecadePlanReader {
+  return {
+    findById: (id) => q.select().from(decadePlanItems).where(eq(decadePlanItems.id, id)).get(),
+    list: () => q.select().from(decadePlanItems).orderBy(asc(decadePlanItems.startYear)).all(),
+  };
+}
+
+function decadePlanRepository(q: Tx): DecadePlanRepository {
+  return {
+    ...decadePlanReader(q),
+    insert: (item: DecadePlanItem) => void q.insert(decadePlanItems).values(item).run(),
+    updateIfVersion: (item, expectedVersion) =>
+      q
+        .update(decadePlanItems)
+        .set({
+          startYear: item.startYear,
+          endYear: item.endYear,
+          statement: item.statement,
+          version: item.version,
+          updatedAt: item.updatedAt,
+        })
+        .where(and(eq(decadePlanItems.id, item.id), eq(decadePlanItems.version, expectedVersion)))
+        .run().changes === 1,
+    removeIfVersion: (id, expectedVersion) =>
+      q
+        .delete(decadePlanItems)
+        .where(and(eq(decadePlanItems.id, id), eq(decadePlanItems.version, expectedVersion)))
+        .run().changes === 1,
+  };
+}
+
+function horizonReader(q: Tx): HorizonReader {
+  return { get: () => q.select().from(threeYearHorizon).limit(1).get() };
+}
+
+function horizonRepository(q: Tx): HorizonRepository {
+  return {
+    ...horizonReader(q),
+    insert: (h: ThreeYearHorizon) => void q.insert(threeYearHorizon).values(h).run(),
+    updateIfVersion: (h, expectedVersion) =>
+      q
+        .update(threeYearHorizon)
+        .set({
+          startYear: h.startYear,
+          endYear: h.endYear,
+          direction: h.direction,
+          whyItMatters: h.whyItMatters,
+          version: h.version,
+          updatedAt: h.updatedAt,
+        })
+        .where(and(eq(threeYearHorizon.id, h.id), eq(threeYearHorizon.version, expectedVersion)))
+        .run().changes === 1,
+  };
+}
+
+function yearDirectionReader(q: Tx): YearDirectionReader {
+  return { get: () => q.select().from(yearDirection).limit(1).get() };
+}
+
+function yearDirectionRepository(q: Tx): YearDirectionRepository {
+  return {
+    ...yearDirectionReader(q),
+    insert: (y: YearDirection) => void q.insert(yearDirection).values(y).run(),
+    updateIfVersion: (y, expectedVersion) =>
+      q
+        .update(yearDirection)
+        .set({
+          year: y.year,
+          direction: y.direction,
+          whyItMatters: y.whyItMatters,
+          version: y.version,
+          updatedAt: y.updatedAt,
+        })
+        .where(and(eq(yearDirection.id, y.id), eq(yearDirection.version, expectedVersion)))
+        .run().changes === 1,
+  };
+}
+
+type RoutineRow = typeof routineItems.$inferSelect;
+const rowToRoutine = (row: RoutineRow): RoutineItem => ({ ...row, kind: row.kind as RoutineKind });
+
+function routineReader(q: Tx): RoutineReader {
+  return {
+    findById: (id) => {
+      const row = q.select().from(routineItems).where(eq(routineItems.id, id)).get();
+      return row ? rowToRoutine(row) : undefined;
+    },
+    // 'evening' sorts before 'morning' alphabetically, so the order of the day is spelled out.
+    list: () =>
+      q
+        .select()
+        .from(routineItems)
+        .orderBy(sql`CASE ${routineItems.kind} WHEN 'morning' THEN 0 ELSE 1 END`, asc(routineItems.position))
+        .all()
+        .map(rowToRoutine),
+    listByKind: (kind) =>
+      q
+        .select()
+        .from(routineItems)
+        .where(eq(routineItems.kind, kind))
+        .orderBy(asc(routineItems.position))
+        .all()
+        .map(rowToRoutine),
+  };
+}
+
+function routineRepository(q: Tx): RoutineRepository {
+  return {
+    ...routineReader(q),
+    insert: (item: RoutineItem) => void q.insert(routineItems).values(item).run(),
+    updateIfVersion: (item, expectedVersion) =>
+      q
+        .update(routineItems)
+        .set({ text: item.text, active: item.active, version: item.version, updatedAt: item.updatedAt })
+        .where(and(eq(routineItems.id, item.id), eq(routineItems.version, expectedVersion)))
+        .run().changes === 1,
+    removeIfVersion: (id, expectedVersion) =>
+      q
+        .delete(routineItems)
+        .where(and(eq(routineItems.id, id), eq(routineItems.version, expectedVersion)))
+        .run().changes === 1,
+    reorder: (positions, now) => {
+      for (const [id, position] of positions) {
+        q.update(routineItems)
+          .set({ position, version: sql`${routineItems.version} + 1`, updatedAt: now })
+          .where(eq(routineItems.id, id))
+          .run();
+      }
+    },
+  };
+}
+
+type CourseChangeRow = typeof courseChanges.$inferSelect;
+const rowToCourseChange = (row: CourseChangeRow): CourseChange => ({ ...row, level: row.level as CourseLevel });
+
+function courseChangeReader(q: Tx): CourseChangeReader {
+  return {
+    findById: (id) => {
+      const row = q.select().from(courseChanges).where(eq(courseChanges.id, id)).get();
+      return row ? rowToCourseChange(row) : undefined;
+    },
+    listOpen: () =>
+      q
+        .select()
+        .from(courseChanges)
+        .where(isNull(courseChanges.resolvedAt))
+        .orderBy(asc(courseChanges.changedAt), asc(sql`rowid`))
+        .all()
+        .map(rowToCourseChange),
+    listAll: () =>
+      q
+        .select()
+        .from(courseChanges)
+        .orderBy(asc(courseChanges.changedAt), asc(sql`rowid`))
+        .all()
+        .map(rowToCourseChange),
+  };
+}
+
+function courseChangeRepository(q: Tx): CourseChangeRepository {
+  return {
+    ...courseChangeReader(q),
+    insert: (c: CourseChange) => void q.insert(courseChanges).values(c).run(),
+    resolveIfOpen: (c) =>
+      q
+        .update(courseChanges)
+        .set({ resolvedAt: c.resolvedAt })
+        .where(and(eq(courseChanges.id, c.id), isNull(courseChanges.resolvedAt)))
         .run().changes === 1,
   };
 }
@@ -178,10 +391,17 @@ function goodLifeConditionRepository(q: Tx): GoodLifeConditionRepository {
   };
 }
 
+type IntentionRow = typeof intentions.$inferSelect;
+const rowToIntention = (row: IntentionRow): Intention => ({ ...row, status: row.status as IntentionStatus });
+
 function intentionReader(q: Tx): IntentionReader {
   return {
-    findById: (id) => q.select().from(intentions).where(eq(intentions.id, id)).get(),
-    list: () => q.select().from(intentions).orderBy(asc(intentions.createdAt)).all(),
+    findById: (id) => {
+      const row = q.select().from(intentions).where(eq(intentions.id, id)).get();
+      return row ? rowToIntention(row) : undefined;
+    },
+    list: () =>
+      q.select().from(intentions).orderBy(asc(intentions.createdAt), asc(sql`rowid`)).all().map(rowToIntention),
   };
 }
 
@@ -192,9 +412,25 @@ function intentionRepository(q: Tx): IntentionRepository {
     updateIfVersion: (i, expectedVersion) =>
       q
         .update(intentions)
-        .set({ title: i.title, desiredResult: i.desiredResult, version: i.version, updatedAt: i.updatedAt })
+        .set({
+          title: i.title,
+          desiredResult: i.desiredResult,
+          whyItMatters: i.whyItMatters,
+          status: i.status,
+          position: i.position,
+          closedAt: i.closedAt,
+          version: i.version,
+          updatedAt: i.updatedAt,
+        })
         .where(and(eq(intentions.id, i.id), eq(intentions.version, expectedVersion)))
         .run().changes === 1,
+    // The order only decides which project is asked first: it is not content, so it leaves `version`
+    // alone — reordering must not make a pending AI proposal about the project stale.
+    reorder: (positions, now) => {
+      for (const [id, position] of positions) {
+        q.update(intentions).set({ position, updatedAt: now }).where(eq(intentions.id, id)).run();
+      }
+    },
   };
 }
 
@@ -929,6 +1165,12 @@ export function createSqliteStore(handle: SqliteHandle, ids: IdGenerator): Store
         (tx) =>
           work({
             season: seasonReader(tx),
+            seasonHistory: seasonHistoryReader(tx),
+            decades: decadePlanReader(tx),
+            horizon: horizonReader(tx),
+            year: yearDirectionReader(tx),
+            routines: routineReader(tx),
+            courseChanges: courseChangeReader(tx),
             goodLifeConditions: goodLifeConditionReader(tx),
             intentions: intentionReader(tx),
             stages: stageReader(tx),
@@ -967,6 +1209,12 @@ export function createSqliteStore(handle: SqliteHandle, ids: IdGenerator): Store
           let revision: number | undefined;
           const result = work({
             season: seasonRepository(tx),
+            seasonHistory: seasonHistoryRepository(tx),
+            decades: decadePlanRepository(tx),
+            horizon: horizonRepository(tx),
+            year: yearDirectionRepository(tx),
+            routines: routineRepository(tx),
+            courseChanges: courseChangeRepository(tx),
             goodLifeConditions: goodLifeConditionRepository(tx),
             intentions: intentionRepository(tx),
             stages: stageRepository(tx),

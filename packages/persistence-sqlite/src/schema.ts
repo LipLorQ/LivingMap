@@ -29,14 +29,114 @@ export const changeLog = sqliteTable(
   (t) => [index("change_log_entity_idx").on(t.entityType, t.entityId)],
 );
 
-/** Singleton: the user's current Season. */
+/**
+ * Singleton: the user's current Season. `focus` is its one main goal. `started_at` is when this stretch
+ * began; a season that really turns is archived into `season_history` and this row starts again.
+ * (The `''` defaults exist only because SQLite cannot ADD a NOT NULL column without one: migration
+ * 0017 backfills `started_at` and the application always writes real values.)
+ */
 export const season = sqliteTable("season", {
   id: text("id").primaryKey(),
   focus: text("focus").notNull(),
+  whyItMatters: text("why_it_matters").notNull().default(""),
+  startedAt: text("started_at").notNull().default(""),
   version: integer("version").notNull(),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
+
+/** Seasons that have ended (Stage 8): the only thing history needs that cannot be derived — the focus they had. */
+export const seasonHistory = sqliteTable("season_history", {
+  id: text("id").primaryKey(),
+  focus: text("focus").notNull(),
+  whyItMatters: text("why_it_matters").notNull(),
+  startedAt: text("started_at").notNull(),
+  endedAt: text("ended_at").notNull(),
+});
+
+/** The sparse plan by decades (Stage 8). Ranges never overlap — enforced by the domain, ordered by start year. */
+export const decadePlanItems = sqliteTable(
+  "decade_plan_items",
+  {
+    id: text("id").primaryKey(),
+    startYear: integer("start_year").notNull(),
+    endYear: integer("end_year").notNull(),
+    statement: text("statement").notNull(),
+    version: integer("version").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => [
+    index("decade_plan_items_start_idx").on(t.startYear),
+    check("decade_range", sql`${t.endYear} >= ${t.startYear}`),
+  ],
+);
+
+/** The one current 3-year horizon: the unique index on a constant makes "at most one row" a database fact. */
+export const threeYearHorizon = sqliteTable(
+  "three_year_horizon",
+  {
+    id: text("id").primaryKey(),
+    startYear: integer("start_year").notNull(),
+    endYear: integer("end_year").notNull(),
+    direction: text("direction").notNull(),
+    whyItMatters: text("why_it_matters").notNull(),
+    version: integer("version").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => [
+    uniqueIndex("three_year_horizon_single_idx").on(sql`(1)`),
+    check("horizon_span", sql`${t.endYear} = ${t.startYear} + 2`),
+  ],
+);
+
+/** The one current year direction (same single-row guarantee as the horizon). */
+export const yearDirection = sqliteTable(
+  "year_direction",
+  {
+    id: text("id").primaryKey(),
+    year: integer("year").notNull(),
+    direction: text("direction").notNull(),
+    whyItMatters: text("why_it_matters").notNull(),
+    version: integer("version").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  () => [uniqueIndex("year_direction_single_idx").on(sql`(1)`)],
+);
+
+/** Stable morning/evening routine items (Stage 8): infrastructure of the day, never an Action or work time. */
+export const routineItems = sqliteTable(
+  "routine_items",
+  {
+    id: text("id").primaryKey(),
+    /** 'morning' | 'evening' (RoutineKind). */
+    kind: text("kind").notNull(),
+    text: text("text").notNull(),
+    position: integer("position").notNull(),
+    active: integer("active", { mode: "boolean" }).notNull(),
+    version: integer("version").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => [index("routine_items_kind_idx").on(t.kind, t.position)],
+);
+
+/** «Курс изменён»: a change of course the owner has not yet marked as rebuilt below it (Stage 8 §12). */
+export const courseChanges = sqliteTable(
+  "course_changes",
+  {
+    id: text("id").primaryKey(),
+    /** 'decade' | 'horizon' | 'year' | 'season' (CourseLevel). */
+    level: text("level").notNull(),
+    targetId: text("target_id").notNull(),
+    summary: text("summary").notNull(),
+    changedAt: text("changed_at").notNull(),
+    resolvedAt: text("resolved_at"),
+  },
+  (t) => [index("course_changes_open_idx").on(t.resolvedAt)],
+);
 
 /** Flat, user-ordered list; not scoped to a Season or Intention (this stage's prompt §6). */
 export const goodLifeConditions = sqliteTable("good_life_conditions", {
@@ -48,11 +148,19 @@ export const goodLifeConditions = sqliteTable("good_life_conditions", {
   updatedAt: text("updated_at").notNull(),
 });
 
-/** At most one row exists in this stage; the schema itself already supports more (ARCHITECTURE §46). */
+/**
+ * The Season's projects (Stage 8): up to three `active` at once — enforced by the domain AND by the
+ * `intentions_active_limit_*` triggers (custom SQL in migration 0017), so no writer can bypass it.
+ */
 export const intentions = sqliteTable("intentions", {
   id: text("id").primaryKey(),
   title: text("title").notNull(),
   desiredResult: text("desired_result").notNull(),
+  whyItMatters: text("why_it_matters").notNull().default(""),
+  /** 'active' | 'deferred' | 'completed' | 'released' (IntentionStatus). */
+  status: text("status").notNull().default("active"),
+  position: integer("position").notNull().default(0),
+  closedAt: text("closed_at"),
   version: integer("version").notNull(),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),

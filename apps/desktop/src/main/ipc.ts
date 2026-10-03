@@ -3,8 +3,10 @@ import {
   AcceptReviewFindingInputSchema,
   AddActionInputSchema,
   AddGoodLifeConditionInputSchema,
+  AddRoutineItemInputSchema,
   AddStageInputSchema,
   BlockActionInputSchema,
+  ChangeIntentionStatusInputSchema,
   CompleteActionInputSchema,
   ConfirmPatternInputSchema,
   ConnectCalendarInputSchema,
@@ -14,6 +16,7 @@ import {
   DeactivatePlanningRuleInputSchema,
   EditActionInputSchema,
   EditGoodLifeConditionInputSchema,
+  EditRoutineItemInputSchema,
   EditStageInputSchema,
   err,
   ForgetMemoryInputSchema,
@@ -23,17 +26,24 @@ import {
   ListPatternCandidatesInputSchema,
   ListPlanningRulesInputSchema,
   ListReviewsInputSchema,
+  PreviewCourseImpactInputSchema,
   RejectPatternInputSchema,
   RejectReviewFindingInputSchema,
+  RemoveDecadeItemInputSchema,
   RemoveGoodLifeConditionInputSchema,
+  RemoveRoutineItemInputSchema,
   ReopenActionInputSchema,
   ReorderActionsInputSchema,
   ReorderGoodLifeConditionsInputSchema,
+  ReorderProjectsInputSchema,
+  ReorderRoutineItemsInputSchema,
   ReorderStagesInputSchema,
+  ResolveCourseChangeInputSchema,
   ResolveProposalInputSchema,
   type Result,
   RetryCaptureInputSchema,
   RetryReviewInputSchema,
+  SaveStrategyInputSchema,
   SearchMemoryInputSchema,
   SetCurrentStageInputSchema,
   SetDailyWorkTargetInputSchema,
@@ -83,6 +93,35 @@ export function registerIpcHandlers(
   handle(IPC_CHANNELS.getStateRevision, null, () => app.queries.getStateRevision());
   handle(IPC_CHANNELS.getCurrentView, null, () => app.queries.getCurrentView());
   handle(IPC_CHANNELS.listChangeHistory, ListChangeHistoryInputSchema, (input) => app.queries.listChangeHistory(input));
+
+  // The Full Map (Stage 8): reads, and the owner's own strategic edits. Never reachable from MCP.
+  handle(IPC_CHANNELS.getStrategyHistory, null, () => app.queries.getStrategyHistory());
+  handle(IPC_CHANNELS.previewCourseImpact, PreviewCourseImpactInputSchema, (input) =>
+    app.queries.previewCourseImpact(input),
+  );
+  handle(IPC_CHANNELS.saveStrategy, SaveStrategyInputSchema, (input) => app.commands.saveStrategy(ui(), input));
+  handle(IPC_CHANNELS.removeDecadeItem, RemoveDecadeItemInputSchema, (input) =>
+    app.commands.removeDecadeItem(ui(), input),
+  );
+  handle(IPC_CHANNELS.resolveCourseChange, ResolveCourseChangeInputSchema, (input) =>
+    app.commands.resolveCourseChange(ui(), input),
+  );
+  handle(IPC_CHANNELS.changeIntentionStatus, ChangeIntentionStatusInputSchema, (input) =>
+    app.commands.changeIntentionStatus(ui(), input),
+  );
+  handle(IPC_CHANNELS.reorderProjects, ReorderProjectsInputSchema, (input) =>
+    app.commands.reorderProjects(ui(), input),
+  );
+  handle(IPC_CHANNELS.addRoutineItem, AddRoutineItemInputSchema, (input) => app.commands.addRoutineItem(ui(), input));
+  handle(IPC_CHANNELS.editRoutineItem, EditRoutineItemInputSchema, (input) =>
+    app.commands.editRoutineItem(ui(), input),
+  );
+  handle(IPC_CHANNELS.removeRoutineItem, RemoveRoutineItemInputSchema, (input) =>
+    app.commands.removeRoutineItem(ui(), input),
+  );
+  handle(IPC_CHANNELS.reorderRoutineItems, ReorderRoutineItemsInputSchema, (input) =>
+    app.commands.reorderRoutineItems(ui(), input),
+  );
 
   handle(IPC_CHANNELS.createSeason, CreateSeasonInputSchema, (input) => app.commands.createSeason(ui(), input));
   handle(IPC_CHANNELS.updateSeasonFocus, UpdateSeasonFocusInputSchema, (input) =>

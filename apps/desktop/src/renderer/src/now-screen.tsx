@@ -4,9 +4,12 @@ import type {
   CalendarSnapshotDto,
   CurrentViewDto,
   ExecutionDto,
+  RoutineItemDto,
+  RoutineKind,
   WhyNowReasonDto,
 } from "@living-map/contracts";
 import { useEffect, useState } from "react";
+import { formatProgress, formatYears } from "./format";
 import { PlanSection } from "./proposals";
 
 const WHY_NOW_LOCAL: Record<WhyNowReasonDto["kind"], string> = {
@@ -159,7 +162,8 @@ function DailyTarget({ minutes, onSave }: { minutes: number; onSave: (minutes: n
   );
 }
 
-function ExecutionPanel({
+/** The one Executor (Stage 5): Начать / Пауза / Продолжить / Готово, shared by the main screen and the map. */
+export function ExecutionPanel({
   action,
   execution,
   handlers,
@@ -236,12 +240,16 @@ function CurrentActionCard({
   action,
   reason,
   planRationale,
+  projectTitle,
+  stageTitle,
   execution,
   handlers,
 }: {
   action: ActionDto | undefined;
   reason: WhyNowReasonDto;
   planRationale: string | null;
+  projectTitle: string | undefined;
+  stageTitle: string | undefined;
   execution: ExecutionDto;
   handlers: ExecutionHandlers;
 }) {
@@ -252,6 +260,12 @@ function CurrentActionCard({
   return (
     <div data-testid="now-action" data-id={action.id} className="space-y-2">
       <h2 className="text-base font-semibold">Сейчас</h2>
+      {projectTitle && (
+        <p data-testid="now-context" className="text-sm text-neutral-600">
+          <span data-testid="now-project">Проект «{projectTitle}»</span>
+          {stageTitle && <span data-testid="now-stage"> · этап «{stageTitle}»</span>}
+        </p>
+      )}
       <p className="text-lg font-medium">{action.title}</p>
       <p data-testid="now-done-when" className="text-neutral-700">
         <span className="font-medium">Готово, когда: </span>
@@ -400,34 +414,129 @@ function CalendarSection({
   );
 }
 
+/** Where today's work leads, kept compact: the Season goal always, the rest one click away. */
+function StrategyBreadcrumb({ view, onOpenMap }: { view: CurrentViewDto; onOpenMap: () => void }) {
+  const { strategy, season } = view;
+  const served = strategy.horizon
+    ? strategy.decadePlan.filter((d) => strategy.horizon?.decadeItemIds.includes(d.id))
+    : [];
+  const hasAbove = strategy.year !== null || strategy.horizon !== null || served.length > 0;
+  return (
+    <section data-testid="now-season" className="space-y-1 rounded border p-3">
+      <p className="text-sm text-neutral-500">Главная цель сезона</p>
+      <p data-testid="now-season-goal" className="font-medium">
+        {season?.focus || "Сезон ещё не задан — заполни его на вкладке «Карта»."}
+      </p>
+      {season?.whyItMatters && <p className="text-sm text-neutral-600">Почему это важно: {season.whyItMatters}</p>}
+      {strategy.seasonProgress && (
+        <p data-testid="now-season-progress" className="text-xs text-neutral-600">
+          Завершено проектов: {strategy.seasonProgress.completed} из {strategy.seasonProgress.total}
+        </p>
+      )}
+      <div className="flex flex-wrap items-center gap-3 pt-1">
+        {hasAbove && (
+          <details data-testid="now-path-details" className="text-sm">
+            <summary className="cursor-pointer text-neutral-600">Куда это ведёт</summary>
+            <ul data-testid="now-path" className="mt-1 space-y-0.5">
+              {strategy.year && (
+                <li data-testid="now-path-year">
+                  <span className="text-neutral-500">Этот год: </span>
+                  {strategy.year.direction}
+                </li>
+              )}
+              {strategy.horizon && (
+                <li data-testid="now-path-horizon">
+                  <span className="text-neutral-500">Ближайшие 3 года: </span>
+                  {strategy.horizon.direction}
+                </li>
+              )}
+              {served.map((d) => (
+                <li key={d.id} data-testid="now-path-decade">
+                  <span className="text-neutral-500">Куда я иду, {formatYears(d.startYear, d.endYear)}: </span>
+                  {d.statement}
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+        <button type="button" data-testid="now-open-map" className="text-sm underline" onClick={onOpenMap}>
+          Открыть карту
+        </button>
+      </div>
+    </section>
+  );
+}
+
+const ROUTINE_TITLES: Record<RoutineKind, string> = { morning: "Утро", evening: "Вечер" };
+
+/** A stable anchor of the day. Not a task list: no checkboxes, never work time, never in the order. */
+function DayRoutine({ kind, routines }: { kind: RoutineKind; routines: readonly RoutineItemDto[] }) {
+  const items = routines.filter((r) => r.kind === kind && r.active);
+  if (items.length === 0) return null;
+  return (
+    <section data-testid={`day-${kind}`} className="rounded border border-dashed p-3">
+      <h3 className="text-sm font-semibold text-neutral-600">{ROUTINE_TITLES[kind]}</h3>
+      <ul className="flex flex-wrap gap-x-4 text-neutral-700">
+        {items.map((item) => (
+          <li key={item.id} data-testid="routine-line">
+            · {item.text}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** Several active projects at a glance: who leads «Сейчас», who needs a new order, honest progress. */
+function ProjectsGlance({ view }: { view: CurrentViewDto }) {
+  const active = view.projects.filter((p) => p.intention.status === "active");
+  if (active.length < 2) return null;
+  return (
+    <section data-testid="now-projects" className="rounded border p-3">
+      <p className="mb-1 text-sm text-neutral-500">Проекты сезона</p>
+      <ul className="space-y-1">
+        {active.map((p) => (
+          <li key={p.intention.id} data-testid="now-project-row" data-focus={p.intention.id === view.intention?.id}>
+            <span className={p.intention.id === view.intention?.id ? "font-medium" : ""}>{p.intention.title}</span>
+            <span className="text-xs text-neutral-500"> · {formatProgress(p.progress)}</span>
+            {p.needsAiReplan && <span className="text-xs text-amber-800"> · нужен новый порядок</span>}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 export function NowScreen({
   view,
   onConnectCalendar,
   onRefreshCalendar,
   onDisconnectCalendar,
   onAskReplan,
+  onOpenMap,
   execution,
 }: {
   view: CurrentViewDto;
   onAskReplan: () => void;
+  onOpenMap: () => void;
   execution: ExecutionHandlers;
   onConnectCalendar: (icalUrl: string) => Promise<unknown>;
   onRefreshCalendar: () => Promise<unknown>;
   onDisconnectCalendar: () => Promise<unknown>;
 }) {
   const [showOrder, setShowOrder] = useState(false);
-  const actionsById = new Map(view.stages.flatMap((s) => s.actions).map((a) => [a.id, a]));
+  const actionsById = new Map(view.projects.flatMap((p) => p.stages.flatMap((s) => s.actions)).map((a) => [a.id, a]));
+  const currentProject = view.projects.find((p) => p.intention.id === view.currentAction?.intentionId);
 
   return (
     <div data-testid="now-screen" className="space-y-4">
-      <section data-testid="now-season" className="rounded border p-3">
-        <p className="text-sm text-neutral-500">Фокус сезона</p>
-        <p className="font-medium">{view.season?.focus || "Сезон ещё не задан — заполни его на вкладке «Замысел»."}</p>
-      </section>
+      <StrategyBreadcrumb view={view} onOpenMap={onOpenMap} />
+
+      <DayRoutine kind="morning" routines={view.routines} />
 
       <section className="rounded border-2 border-blue-300 bg-blue-50 p-3">
         {!view.intention ? (
-          <p data-testid="now-empty">Пока нет активного Замысла. Начни с вкладки «Замысел».</p>
+          <p data-testid="now-empty">Пока нет активного Замысла. Начни с вкладки «Замыслы».</p>
         ) : view.needsAiReplan || !view.currentAction ? (
           <>
             <NeedsAiReplan onAskReplan={onAskReplan} />
@@ -442,11 +551,15 @@ export function NowScreen({
             action={actionsById.get(view.currentAction.actionId)}
             reason={view.currentAction.reason}
             planRationale={view.currentAction.planRationale}
+            projectTitle={currentProject?.intention.title}
+            stageTitle={currentProject?.stages.find((st) => st.id === view.currentAction?.stageId)?.title}
             execution={view.execution}
             handlers={execution}
           />
         )}
       </section>
+
+      <ProjectsGlance view={view} />
 
       <CalendarSection
         snapshot={view.calendarSnapshot}
@@ -454,6 +567,8 @@ export function NowScreen({
         onRefresh={onRefreshCalendar}
         onDisconnect={onDisconnectCalendar}
       />
+
+      <DayRoutine kind="evening" routines={view.routines} />
 
       {view.intention && (
         <section className="rounded border p-3">

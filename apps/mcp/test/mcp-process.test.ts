@@ -278,3 +278,77 @@ describe("AI brain over stdio: read → propose → user decides in desktop", ()
     expect(after.orderedActionPlan.orderedActionIds[1]).toBe(action.id);
   });
 });
+
+describe("The Full Map over stdio (Stage 8): read-only for the AI", () => {
+  it("the AI reads the whole causal line and every project, never routines, and has no way to change any of it", async () => {
+    const app = openDesktop();
+    const ui = () => app.newContext("user-ui", "test");
+    const unwrap = <T>(r: Result<T>): T => {
+      if (!r.ok) throw new Error(r.error.message);
+      return r.value;
+    };
+    const year = new Date().getFullYear();
+    unwrap(app.commands.createSeason(ui(), { focus: "Рабочая карта", whyItMatters: "Двигает год" }));
+    unwrap(
+      app.commands.saveStrategy(ui(), { level: "decade", startYear: year, endYear: year + 9, statement: "Строить" }),
+    );
+    unwrap(
+      app.commands.saveStrategy(ui(), { level: "horizon", startYear: year, direction: "Запуск", whyItMatters: "" }),
+    );
+    unwrap(app.commands.saveStrategy(ui(), { level: "year", year, direction: "MVP", whyItMatters: "" }));
+    const first = unwrap(app.commands.createIntention(ui(), { title: "Первый", desiredResult: "r1" }));
+    const second = unwrap(app.commands.createIntention(ui(), { title: "Второй", desiredResult: "r2" }));
+    unwrap(app.commands.addRoutineItem(ui(), { kind: "morning", text: "Секретная зарядка" }));
+
+    const client = await spawnMcp();
+    type Ctx = {
+      stateRevision: number;
+      strategy: {
+        decadePlan: { statement: string }[];
+        horizon: { direction: string } | null;
+        year: { direction: string } | null;
+      };
+      projects: { intention: { id: string; status: string }; progress: { actionsTotal: number } }[];
+      projectSlots: { active: number; max: number };
+      season: { focus: string; whyItMatters: string };
+      meanings: Record<string, string>;
+    };
+    const ctx = unwrap(await call<Ctx>(client, "get_living_map_context"));
+    expect(ctx.strategy.decadePlan.map((d) => d.statement)).toEqual(["Строить"]);
+    expect(ctx.strategy.horizon?.direction).toBe("Запуск");
+    expect(ctx.strategy.year?.direction).toBe("MVP");
+    expect(ctx.season).toMatchObject({ focus: "Рабочая карта", whyItMatters: "Двигает год" });
+    expect(ctx.projects.map((p) => p.intention.id)).toEqual([first.id, second.id]);
+    expect(ctx.projectSlots).toEqual({ active: 2, max: 3 });
+    expect(ctx.meanings.strategy).toContain("belong to the user alone");
+    // Routines are the owner's infrastructure of the day: not part of what the AI is given.
+    expect(JSON.stringify(ctx)).not.toContain("Секретная зарядка");
+
+    // No tool exists to change any strategic layer, a project's status or a routine.
+    for (const forbidden of [
+      "save_strategy",
+      "set_year_direction",
+      "change_course",
+      "change_intention_status",
+      "reorder_projects",
+      "add_routine_item",
+    ]) {
+      expect((await client.callTool({ name: forbidden, arguments: {} })).isError).toBe(true);
+    }
+
+    // A paused project cannot be planned: pausing is the owner's act and the AI must wait for it to resume.
+    unwrap(
+      app.commands.changeIntentionStatus(ui(), { id: second.id, expectedVersion: second.version, to: "deferred" }),
+    );
+    const refreshed = unwrap(await call<Ctx>(client, "get_living_map_context"));
+    expect(
+      await call(client, "propose_desired_result_change", {
+        intentionId: second.id,
+        expectedRevision: refreshed.stateRevision,
+        desiredResult: "Новый",
+        summary: "s",
+        rationale: "r",
+      }),
+    ).toMatchObject({ ok: false, error: { code: "VALIDATION_ERROR" } });
+  });
+});

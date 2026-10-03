@@ -12,6 +12,8 @@ export const APP_ERROR_CODES = [
   "INTEGRATION_UNAVAILABLE",
   "STORAGE_ERROR",
   "SCHEMA_INCOMPATIBLE",
+  /** Three projects are already active in the Season (Stage 8): complete, release or defer one first. */
+  "ACTIVE_PROJECT_LIMIT",
 ] as const;
 
 export type AppErrorCode = (typeof APP_ERROR_CODES)[number];

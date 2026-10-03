@@ -111,9 +111,10 @@ describe("Intention → Stage → Action", () => {
 
     const intention = app.commands.createIntention(ui, { title: "Ship v1", desiredResult: "" });
     if (!intention.ok) throw new Error(intention.error.message);
+    // Stage 8: a Season can hold several projects (up to three active) — the second one is fine.
     expect(app.commands.createIntention(ui, { title: "Second", desiredResult: "" })).toMatchObject({
-      ok: false,
-      error: { code: "VALIDATION_ERROR" },
+      ok: true,
+      value: { status: "active", position: 2 },
     });
 
     const updated = app.commands.updateIntention(ui, {
@@ -313,6 +314,8 @@ describe("Сейчас / calendar (Stage 4)", () => {
     const firstActionId = firstView.value.stages[0]?.actions[0]?.id;
     expect(firstView.value.currentAction).toEqual({
       actionId: firstActionId,
+      intentionId: firstView.value.intention?.id,
+      stageId: firstView.value.stages[0]?.id,
       reason: { kind: "first-in-plan" },
       planRationale: firstView.value.orderedActionPlan?.rationale,
     });

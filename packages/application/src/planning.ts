@@ -30,10 +30,14 @@ import type { ReadScope } from "./ports";
  */
 export const PLANNING_MEANINGS: Record<string, string> = {
   language: "LivingMap is a Russian-language product. Talk to the user in Russian.",
-  season: "«Фокус сезона» — what this stretch of the user's life is about right now. Every route should serve it.",
+  season:
+    "«Главная цель сезона» (season.focus) — the Season's ONE main goal: what this stretch of the user's life is about right now. Every route should serve it. whyItMatters says how it moves the current year; startedAt is when this season began.",
   goodLifeConditions:
     "«Чем ты не хочешь жертвовать ради целей?» — things the user refuses to sacrifice for their goals (sleep, health, relationships, free time…). These are hard strategic constraints: every route and every order must respect them. They are NOT optional motivational notes.",
-  intention: "«Замысел» — one real, significant thing the user wants to bring into their life.",
+  intention:
+    "«Замысел» — a project: one real, significant thing the user wants to bring into their life. At most THREE are active in the Season at once (usually one or two); status: active, deferred (paused), completed, released. `projects` lists the active ones in their order, then paused ones, each with its own Stages, Actions, order and honest progress; `intention`/`stages`/`orderedActionPlan` describe the FOCUS project — the one that owns «Сейчас». Always pass the intentionId of the project you mean. You cannot activate, pause, complete or release a project: that is the user's decision.",
+  strategy:
+    "One life, one causal line, no categories: the sparse plan by decades (strategy.decadePlan, a few words each) → the next 3 years (strategy.horizon) → this year (strategy.year) → this Season (season.focus is its ONE main goal) → the active projects → the current Stage → the current Action («Сейчас»). Far = coarse, near = detailed. Every layer carries one short «whyItMatters» sentence saying why it serves the layer above. Use the whole line to understand WHY the user does what they do, and propose routes that serve it. You can read all of it but change none of it: the decades, the 3-year horizon, the year and the Season goal belong to the user alone. If strategy.openCourseChanges is not empty the user has just changed course and the projects listed in its impact may no longer fit: propose a rebuilt route for them (create_route_proposal) — never act as if the old direction still stood. Progress is only ever a count of explicit things (projects[].progress, strategy.seasonProgress) and evidence is only recorded facts: never invent percentages.",
   desiredResult:
     "«Желаемый результат» — what must become true for the Intention to count as embodied/completed. It is the finish line, not a description. Changing it requires the user's confirmation (propose_desired_result_change).",
   stages:
@@ -43,7 +47,7 @@ export const PLANNING_MEANINGS: Record<string, string> = {
   orderedActionPlan:
     "«Порядок действий» — the canonical execution order across all Stages: given current reality, the order in which it makes sense to move. It always covers exactly the unfinished actions. null means no route has been approved yet. unplannedActionIds are unfinished actions the approved order does not cover yet (e.g. the user added them manually) — include them next time you order.",
   permissions:
-    "You may NOT change strategy directly. A first route, any new/edited Stage or Action, doneWhen changes and route replanning go through create_route_proposal; changes to the desired result through propose_desired_result_change. The user reviews and confirms or rejects every proposal in the LivingMap desktop app — never claim a proposal is applied until get_proposal says accepted. The only direct writes you have are reorder_existing_actions (reorder the already-approved unfinished actions of an already-approved route) and save_memory (remember something; it never changes the route, the order or «Сейчас»). Changing the Season or «Чем ты не хочешь жертвовать ради целей?» is not available to you: suggest it to the user in words. Writing to the external calendar is not available.",
+    "You may NOT change strategy directly. A first route, any new/edited Stage or Action, doneWhen changes and route replanning go through create_route_proposal; changes to the desired result through propose_desired_result_change. The user reviews and confirms or rejects every proposal in the LivingMap desktop app — never claim a proposal is applied until get_proposal says accepted. The only direct writes you have are reorder_existing_actions (reorder the already-approved unfinished actions of an already-approved route) and save_memory (remember something; it never changes the route, the order or «Сейчас»). Changing the Season, the year, the 3-year horizon, the decades, a project's status or order (activate, pause, complete, release), the daily routines or «Чем ты не хочешь жертвовать ради целей?» is not available to you: suggest it to the user in words. Writing to the external calendar is not available.",
   memory:
     "«Память» — decisions, facts, observations, preferences/constraints, dated commitments and ideas the user told LivingMap, each with the «+» Capture it came from. Before answering or planning, search_memory for anything relevant and respect what you find (earlier decisions and constraints still hold unless the user changed them). Memory is context, not strategy: a memory never changes the route by itself.",
   captures:
@@ -52,7 +56,7 @@ export const PLANNING_MEANINGS: Record<string, string> = {
     "pendingProposals are awaiting the user's decision. status=stale means LivingMap changed after the proposal was made; it can no longer be applied — reread the context and propose again if still relevant.",
   history: "recentHistory: meaningful changes, newest first. actor user-ui = the user, mcp-ai = an AI via MCP.",
   currentAction:
-    "«Сейчас» — the one Action CurrentActionSelector picked as admissible right now (ARCHITECTURE §26). null with needsAiReplan=false means there is no active Intention yet; null with needsAiReplan=true means the order exists but nothing in it can be safely selected — propose a replan, do not invent a local order.",
+    "«Сейчас» — the one Action CurrentActionSelector picked as admissible right now (ARCHITECTURE §26). It may belong to any active project (currentAction.intentionId): LivingMap asks the projects in the user's order and takes the first admissible Action of the first project that has one. null with needsAiReplan=false means there is no active project yet; null with needsAiReplan=true means orders exist but nothing in any of them can be safely selected — propose a replan (per project: projects[].needsAiReplan says which), do not invent a local order.",
   execution:
     "«Исполнение» — factual work time the user tracked with Начать/Пауза/Продолжить/Готово: state of the current Action (idle/running/paused), all time worked on it, today's and this week's totals (local days, Monday-start weeks) and the user's daily work target. Facts, not a score. You can read it; you cannot start, pause or change it.",
   calendarSnapshot:
@@ -63,7 +67,10 @@ export const PLANNING_MEANINGS: Record<string, string> = {
     "Durable context the user confirmed from a repeated pattern in «Разборы» (e.g. «медицинские визиты обычно съедают половину рабочего дня»). Treat each as real context for planning/replanning — never a rigid rule you enforce mechanically, and never something you can create, confirm or deactivate yourself. An empty list is normal and means nothing has been confirmed yet.",
 };
 
-type PlanningScope = Pick<ReadScope, "season" | "goodLifeConditions" | "intentions" | "stages" | "actions" | "plans">;
+type PlanningScope = Pick<
+  ReadScope,
+  "season" | "goodLifeConditions" | "intentions" | "stages" | "actions" | "plans" | "courseChanges"
+>;
 
 /** Every Stage and Action of one Intention. */
 export function intentionTree(s: PlanningScope, intentionId: EntityId): { stages: Stage[]; actions: Action[] } {
@@ -72,9 +79,12 @@ export function intentionTree(s: PlanningScope, intentionId: EntityId): { stages
 }
 
 /**
- * Identity of everything a strategic proposal about `intentionId` reasoned about: Season, the
- * Good Life Conditions, the Intention, its Stages, Actions and plan. Changes to any of them make a
- * pending proposal stale. Other proposals are not part of it, so creating one never stales another.
+ * Identity of everything a strategic proposal about `intentionId` reasoned about: the Season (which
+ * stretch of life it is — not its wording), the Good Life Conditions, the Intention, its Stages, Actions and
+ * plan — plus every recorded change of course (Stage 8): the owner turning the year/3-year/decade/season
+ * makes a pending proposal stale, while a mere re-wording does not. Reordering projects does not either (it
+ * leaves versions alone). Other proposals are not part of it, so creating one never stales another, and
+ * neither does anything that happens to a different project.
  */
 export function contextFingerprint(s: PlanningScope, intentionId: EntityId): string {
   const { stages, actions } = intentionTree(s, intentionId);
@@ -82,12 +92,13 @@ export function contextFingerprint(s: PlanningScope, intentionId: EntityId): str
   const intention = s.intentions.findById(intentionId);
   const plan = s.plans.findByIntention(intentionId);
   return planningFingerprint([
-    ...(season ? [season] : []),
+    ...(season ? [{ id: `${season.id}:${season.startedAt}`, version: 1 }] : []),
     ...s.goodLifeConditions.list(),
     ...(intention ? [intention] : []),
     ...stages,
     ...actions,
     ...(plan ? [plan] : []),
+    ...s.courseChanges.listAll().map((c) => ({ id: c.id, version: 1 })),
   ]);
 }
 
@@ -136,7 +147,13 @@ export function computeCurrentAction(
   const running = runningActionId ? actions.find((a) => a.id === runningActionId && a.status === "open") : undefined;
   if (running) {
     return {
-      currentAction: { actionId: running.id, reason: { kind: "working" }, planRationale: plan?.rationale ?? null },
+      currentAction: {
+        actionId: running.id,
+        intentionId: intention.id,
+        stageId: running.stageId,
+        reason: { kind: "working" },
+        planRationale: plan?.rationale ?? null,
+      },
       needsAiReplan: false,
     };
   }
@@ -147,8 +164,15 @@ export function computeCurrentAction(
     nextHardEventStart: nextHardEventStart(calendarSnapshot, now),
   });
   if (selection.status === "needs-ai-replan") return { currentAction: null, needsAiReplan: true };
+  const selected = actions.find((a) => a.id === selection.actionId) as Action;
   return {
-    currentAction: { actionId: selection.actionId, reason: selection.reason, planRationale: plan?.rationale ?? null },
+    currentAction: {
+      actionId: selection.actionId,
+      intentionId: intention.id,
+      stageId: selected.stageId,
+      reason: selection.reason,
+      planRationale: plan?.rationale ?? null,
+    },
     needsAiReplan: false,
   };
 }

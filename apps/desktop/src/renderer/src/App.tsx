@@ -7,18 +7,23 @@ import type {
   GoodLifeConditionDto,
   IntentionDto,
   OrderedActionPlanDto,
+  ProjectViewDto,
   Result,
   SeasonDto,
   StageWithActionsDto,
 } from "@living-map/contracts";
 import { useCallback, useEffect, useState } from "react";
+import { PROJECT_LIMIT_TEXT } from "./format";
+import { MapScreen } from "./map";
 import { MemoryPanel } from "./memory";
 import { NowScreen } from "./now-screen";
 import { PlusPanel } from "./plus";
 import { PlanSection, ProposalsSection, STALE_PROPOSAL_TEXT } from "./proposals";
 import { ReviewsPanel } from "./reviews";
+import { RoutineSection } from "./routines";
+import { EditableText, ReorderButtons } from "./shared-ui";
 
-type Tab = "now" | "editor" | "memory" | "reviews";
+type Tab = "now" | "map" | "editor" | "memory" | "reviews";
 
 // Stage 4: "Сейчас" is the default screen (execution interface); the previous utilitarian
 // editing screen moves behind a "Замысел" tab (direct editing / fallback, per Stage 4 §15).
@@ -68,6 +73,19 @@ export function App() {
 
   if (!view) return <main className="p-6 font-sans text-sm">Загрузка…</main>;
 
+  const executionHandlers = {
+    onStartWork: (actionId: string) => run(window.livingMap.commands.startWork({ actionId })),
+    onPauseWork: (actionId: string) => run(window.livingMap.commands.pauseWork({ actionId })),
+    onCompleteAction: (id: string, expectedVersion: number) =>
+      run(window.livingMap.commands.completeAction({ id, expectedVersion })),
+    onSetDailyWorkTarget: (minutes: number) => run(window.livingMap.commands.setDailyWorkTarget({ minutes })),
+  };
+  // Prefilled, never auto-sent: the user can edit the request first.
+  const askAi = (text: string) => {
+    setPlusDraft((draft) => (draft.trim() ? draft : text));
+    setPlusOpen(true);
+  };
+
   return (
     <main className="mx-auto max-w-3xl space-y-8 p-6 font-sans text-sm text-neutral-900">
       <header className="flex items-center justify-between">
@@ -94,12 +112,21 @@ export function App() {
           </button>
           <button
             type="button"
+            data-testid="nav-map"
+            aria-current={tab === "map"}
+            className={tab === "map" ? "font-semibold underline" : ""}
+            onClick={() => setTab("map")}
+          >
+            Карта
+          </button>
+          <button
+            type="button"
             data-testid="nav-editor"
             aria-current={tab === "editor"}
             className={tab === "editor" ? "font-semibold underline" : ""}
             onClick={() => setTab("editor")}
           >
-            Замысел
+            Замыслы
           </button>
           <button
             type="button"
@@ -171,26 +198,25 @@ export function App() {
           onConnectCalendar={(icalUrl) => run(window.livingMap.commands.connectCalendar({ icalUrl }))}
           onRefreshCalendar={() => run(window.livingMap.commands.refreshCalendar())}
           onDisconnectCalendar={() => run(window.livingMap.commands.disconnectCalendar())}
-          onAskReplan={() => {
-            // Prefilled, never auto-sent: the user can edit the request first.
-            setPlusDraft((draft) => (draft.trim() ? draft : "Перестрой текущий порядок действий."));
-            setPlusOpen(true);
-          }}
-          execution={{
-            onStartWork: (actionId) => run(window.livingMap.commands.startWork({ actionId })),
-            onPauseWork: (actionId) => run(window.livingMap.commands.pauseWork({ actionId })),
-            onCompleteAction: (id, expectedVersion) =>
-              run(window.livingMap.commands.completeAction({ id, expectedVersion })),
-            onSetDailyWorkTarget: (minutes) => run(window.livingMap.commands.setDailyWorkTarget({ minutes })),
-          }}
+          onAskReplan={() => askAi("Перестрой текущий порядок действий.")}
+          onOpenMap={() => setTab("map")}
+          execution={executionHandlers}
+        />
+      ) : tab === "map" ? (
+        <MapScreen
+          view={view}
+          run={run}
+          execution={executionHandlers}
+          onAskRebuild={askAi}
+          onOpenNow={() => setTab("now")}
         />
       ) : (
         <>
           <SeasonSection
             season={view.season}
             onCreate={(focus) => run(window.livingMap.commands.createSeason({ focus }))}
-            onUpdate={(expectedVersion, focus, startsNewSeason) =>
-              run(window.livingMap.commands.updateSeasonFocus({ expectedVersion, focus, startsNewSeason }))
+            onUpdate={(expectedVersion, focus) =>
+              run(window.livingMap.commands.updateSeasonFocus({ expectedVersion, focus, startsNewSeason: false }))
             }
           />
 
@@ -206,11 +232,21 @@ export function App() {
             onReorder={(orderedIds) => run(window.livingMap.commands.reorderGoodLifeConditions({ orderedIds }))}
           />
 
-          <IntentionSection
-            intention={view.intention}
-            stages={view.stages}
-            plan={view.orderedActionPlan}
-            unplannedActionIds={view.unplannedActionIds}
+          <RoutineSection
+            routines={view.routines}
+            handlers={{
+              onAdd: (kind, text) => run(window.livingMap.commands.addRoutineItem({ kind, text })),
+              onEdit: (id, expectedVersion, patch) =>
+                run(window.livingMap.commands.editRoutineItem({ id, expectedVersion, ...patch })),
+              onRemove: (id, expectedVersion) =>
+                run(window.livingMap.commands.removeRoutineItem({ id, expectedVersion })),
+              onReorder: (kind, orderedIds) => run(window.livingMap.commands.reorderRoutineItems({ kind, orderedIds })),
+            }}
+          />
+
+          <ProjectsSection
+            projects={view.projects}
+            slots={view.projectSlots}
             onCreateIntention={(title, desiredResult) =>
               run(window.livingMap.commands.createIntention({ title, desiredResult }))
             }
@@ -262,12 +298,13 @@ const ERROR_MESSAGES: Record<AppError["code"], string> = {
   NOT_FOUND: "Не найдено.",
   CONFLICT_RELOAD: "Данные изменились в другом месте — обновите и попробуйте снова.",
   PERMISSION_DENIED: "Действие не разрешено.",
-  REQUIRES_CONFIRMATION: "Требуется подтверждение.",
+  REQUIRES_CONFIRMATION: "Сначала посмотри, на что это повлияет, и подтверди.",
   STALE_PROPOSAL: STALE_PROPOSAL_TEXT,
   NEEDS_AI_REPLAN: "Нужно перепланирование ИИ.",
   INTEGRATION_UNAVAILABLE: "Внешний сервис недоступен.",
   STORAGE_ERROR: "Не удалось сохранить данные.",
   SCHEMA_INCOMPATIBLE: "Версия данных несовместима с приложением.",
+  ACTIVE_PROJECT_LIMIT: PROJECT_LIMIT_TEXT,
 };
 
 function translateErrorCode(code: AppError["code"]): string {
@@ -284,6 +321,27 @@ const HISTORY_LABELS: Record<string, string> = {
   "goodLifeCondition.reorder": "Изменён порядок ограничений",
   "intention.create": "Создан замысел",
   "intention.update": "Изменён замысел",
+  "intention.complete": "Проект завершён",
+  "intention.release": "Проект отпущен",
+  "intention.defer": "Проект поставлен на паузу",
+  "intention.activate": "Проект снова в работе",
+  "intention.reopen": "Проект возвращён из завершённых (на паузе)",
+  "intention.reorder": "Изменён порядок проектов",
+  "strategy.decade.add": "Добавлено десятилетие в карте",
+  "strategy.decade.reword": "Уточнена формулировка десятилетия",
+  "strategy.decade.course": "Сменён курс десятилетия",
+  "strategy.decade.remove": "Убрано десятилетие из карты",
+  "strategy.horizon.set": "Задано направление на 3 года",
+  "strategy.horizon.reword": "Уточнена формулировка 3 лет",
+  "strategy.horizon.course": "Сменён курс на 3 года",
+  "strategy.year.set": "Задано направление года",
+  "strategy.year.reword": "Уточнена формулировка года",
+  "strategy.year.course": "Сменён курс года",
+  "strategy.courseChange.resolve": "Отмечено: после смены курса всё пересобрано",
+  "routine.add": "Добавлен пункт утра или вечера",
+  "routine.edit": "Изменён пункт утра или вечера",
+  "routine.remove": "Удалён пункт утра или вечера",
+  "routine.reorder": "Изменён порядок утра или вечера",
   "stage.add": "Добавлен этап",
   "stage.edit": "Изменён этап",
   "stage.reorder": "Изменён порядок этапов",
@@ -357,45 +415,6 @@ function translateActionStatus(status: ActionDto["status"]): string {
   return ACTION_STATUS_LABELS[status] ?? status;
 }
 
-function reorderIds<T extends { id: string }>(items: readonly T[], index: number, delta: -1 | 1): string[] {
-  const ids = items.map((i) => i.id);
-  const target = index + delta;
-  const swapped = [...ids];
-  [swapped[index], swapped[target]] = [swapped[target] as string, swapped[index] as string];
-  return swapped;
-}
-
-function ReorderButtons<T extends { id: string }>({
-  items,
-  index,
-  onReorder,
-}: {
-  items: readonly T[];
-  index: number;
-  onReorder: (orderedIds: string[]) => void;
-}) {
-  return (
-    <span className="space-x-1">
-      <button
-        type="button"
-        data-testid="move-up"
-        disabled={index === 0}
-        onClick={() => onReorder(reorderIds(items, index, -1))}
-      >
-        ↑
-      </button>
-      <button
-        type="button"
-        data-testid="move-down"
-        disabled={index === items.length - 1}
-        onClick={() => onReorder(reorderIds(items, index, 1))}
-      >
-        ↓
-      </button>
-    </span>
-  );
-}
-
 function SeasonSection({
   season,
   onCreate,
@@ -403,10 +422,9 @@ function SeasonSection({
 }: {
   season: SeasonDto | null;
   onCreate: (focus: string) => void;
-  onUpdate: (expectedVersion: number, focus: string, startsNewSeason: boolean) => void;
+  onUpdate: (expectedVersion: number, focus: string) => void;
 }) {
   const [draft, setDraft] = useState(season?.focus ?? "");
-  const [startsNewSeason, setStartsNewSeason] = useState(false);
   useEffect(() => setDraft(season?.focus ?? ""), [season?.focus]);
   return (
     <section data-testid="season" className="space-y-1 rounded border p-3">
@@ -419,24 +437,17 @@ function SeasonSection({
         rows={2}
       />
       {season && (
-        <label className="flex items-center gap-2 text-xs text-neutral-600">
-          <input
-            type="checkbox"
-            data-testid="season-starts-new"
-            checked={startsNewSeason}
-            onChange={(e) => setStartsNewSeason(e.target.checked)}
-          />
-          Это смена сезона, а не просто уточнение формулировки
-        </label>
+        <p className="text-xs text-neutral-600">
+          Здесь можно уточнить слова. Если сезон действительно сменился, это делается на вкладке «Карта».
+        </p>
       )}
       <button
         type="button"
         data-testid="season-save"
         className="rounded border px-2 py-0.5"
         onClick={() => {
-          if (season) onUpdate(season.version, draft, startsNewSeason);
+          if (season) onUpdate(season.version, draft);
           else onCreate(draft);
-          setStartsNewSeason(false);
         }}
       >
         Сохранить фокус
@@ -496,43 +507,23 @@ function GoodLifeConditionsSection({
   );
 }
 
-function EditableText({
-  value,
-  onSave,
-  testId,
-  multiline = false,
+function CreateIntentionForm({
+  onCreate,
+  full,
 }: {
-  value: string;
-  onSave: (text: string) => void;
-  testId: string;
-  multiline?: boolean;
+  onCreate: (title: string, desiredResult: string) => void;
+  full: boolean;
 }) {
-  const [draft, setDraft] = useState(value);
-  useEffect(() => setDraft(value), [value]);
-  const Field = multiline ? "textarea" : "input";
-  return (
-    <span className="flex flex-1 items-center gap-1">
-      <Field
-        data-testid={testId}
-        className="flex-1 rounded border px-1"
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-      />
-      {draft !== value && (
-        <button type="button" data-testid={`${testId}-save`} onClick={() => onSave(draft)}>
-          Сохранить
-        </button>
-      )}
-    </span>
-  );
-}
-
-function CreateIntentionForm({ onCreate }: { onCreate: (title: string, desiredResult: string) => void }) {
   const [title, setTitle] = useState("");
   const [desiredResult, setDesiredResult] = useState("");
   return (
     <section data-testid="intention-create" className="space-y-2 rounded border p-3">
       <h2 className="font-semibold">Новый замысел</h2>
+      {full && (
+        <p data-testid="intention-limit-note" className="text-amber-800">
+          {PROJECT_LIMIT_TEXT}
+        </p>
+      )}
       <input
         data-testid="intention-title-new"
         className="w-full rounded border px-2 py-1"
@@ -562,11 +553,7 @@ function CreateIntentionForm({ onCreate }: { onCreate: (title: string, desiredRe
   );
 }
 
-type IntentionSectionProps = {
-  intention: IntentionDto | null;
-  stages: StageWithActionsDto[];
-  plan: OrderedActionPlanDto | null;
-  unplannedActionIds: string[];
+type ProjectHandlers = {
   onCreateIntention: (title: string, desiredResult: string) => void;
   onUpdateIntention: (id: string, expectedVersion: number, title: string, desiredResult: string) => void;
   onAddStage: (intentionId: string, title: string) => void;
@@ -582,9 +569,34 @@ type IntentionSectionProps = {
   onReorderActions: (stageId: string, orderedIds: string[]) => void;
 };
 
-function IntentionSection(props: IntentionSectionProps) {
-  if (!props.intention) return <CreateIntentionForm onCreate={props.onCreateIntention} />;
-  return <IntentionEditor {...props} intention={props.intention} />;
+type IntentionSectionProps = ProjectHandlers & {
+  intention: IntentionDto | null;
+  stages: StageWithActionsDto[];
+  plan: OrderedActionPlanDto | null;
+  unplannedActionIds: string[];
+};
+
+/** Every project of the Season (up to three active) with its own route, then the form for a new one. */
+function ProjectsSection({
+  projects,
+  slots,
+  ...handlers
+}: ProjectHandlers & { projects: ProjectViewDto[]; slots: CurrentViewDto["projectSlots"] }) {
+  return (
+    <div className="space-y-3">
+      {projects.map((project) => (
+        <IntentionEditor
+          key={project.intention.id}
+          {...handlers}
+          intention={project.intention}
+          stages={project.stages}
+          plan={project.orderedActionPlan}
+          unplannedActionIds={project.unplannedActionIds}
+        />
+      ))}
+      <CreateIntentionForm onCreate={handlers.onCreateIntention} full={slots.active >= slots.max} />
+    </div>
+  );
 }
 
 function IntentionEditor(props: IntentionSectionProps & { intention: IntentionDto }) {
@@ -599,7 +611,10 @@ function IntentionEditor(props: IntentionSectionProps & { intention: IntentionDt
 
   return (
     <section data-testid="intention" className="space-y-3 rounded border p-3">
-      <h2 className="font-semibold">Замысел</h2>
+      <h2 className="font-semibold">
+        Замысел
+        {intention.status === "deferred" && <span className="ml-2 font-normal text-neutral-500">на паузе</span>}
+      </h2>
       <input
         data-testid="intention-title"
         className="w-full rounded border px-2 py-1 font-medium"

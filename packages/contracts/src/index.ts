@@ -70,8 +70,22 @@ export {
   RemoveGoodLifeConditionInputSchema,
   ReorderGoodLifeConditionsInputSchema,
 } from "./good-life-condition";
-export type { CreateIntentionInput, IntentionDto, UpdateIntentionInput } from "./intention";
-export { CreateIntentionInputSchema, IntentionDtoSchema, UpdateIntentionInputSchema } from "./intention";
+export type {
+  ChangeIntentionStatusInput,
+  CreateIntentionInput,
+  IntentionDto,
+  IntentionStatus,
+  ReorderProjectsInput,
+  UpdateIntentionInput,
+} from "./intention";
+export {
+  ChangeIntentionStatusInputSchema,
+  CreateIntentionInputSchema,
+  IntentionDtoSchema,
+  IntentionStatusSchema,
+  ReorderProjectsInputSchema,
+  UpdateIntentionInputSchema,
+} from "./intention";
 export type {
   ConfirmPatternInput,
   DeactivatePlanningRuleInput,
@@ -153,6 +167,22 @@ export {
   ReviewTypeSchema,
   ReviewWithFindingsDtoSchema,
 } from "./review";
+export type {
+  AddRoutineItemInput,
+  EditRoutineItemInput,
+  RemoveRoutineItemInput,
+  ReorderRoutineItemsInput,
+  RoutineItemDto,
+  RoutineKind,
+} from "./routine";
+export {
+  AddRoutineItemInputSchema,
+  EditRoutineItemInputSchema,
+  RemoveRoutineItemInputSchema,
+  ReorderRoutineItemsInputSchema,
+  RoutineItemDtoSchema,
+  RoutineKindSchema,
+} from "./routine";
 export type { CreateSeasonInput, SeasonDto, UpdateSeasonFocusInput } from "./season";
 export { CreateSeasonInputSchema, SeasonDtoSchema, UpdateSeasonFocusInputSchema } from "./season";
 export type { AddStageInput, EditStageInput, ReorderStagesInput, SetCurrentStageInput, StageDto } from "./stage";
@@ -166,9 +196,47 @@ export {
 export type { StateRevisionDto } from "./state-revision";
 export { StateRevisionDtoSchema } from "./state-revision";
 export type {
+  ClosedProjectDto,
+  CourseChangeDto,
+  CourseImpactDto,
+  CourseLevel,
+  DecadePlanItemDto,
+  EvidenceItemDto,
+  HorizonDto,
+  ImpactItemDto,
+  PastSeasonDto,
+  PreviewCourseImpactInput,
+  RemoveDecadeItemInput,
+  ResolveCourseChangeInput,
+  SaveStrategyInput,
+  StrategyDto,
+  StrategyHistoryDto,
+  YearDirectionDto,
+} from "./strategy";
+export {
+  ClosedProjectDtoSchema,
+  CourseChangeDtoSchema,
+  CourseImpactDtoSchema,
+  CourseLevelSchema,
+  DecadePlanItemDtoSchema,
+  EvidenceItemDtoSchema,
+  HorizonDtoSchema,
+  ImpactItemDtoSchema,
+  PastSeasonDtoSchema,
+  PreviewCourseImpactInputSchema,
+  RemoveDecadeItemInputSchema,
+  ResolveCourseChangeInputSchema,
+  SaveStrategyInputSchema,
+  StrategyDtoSchema,
+  StrategyHistoryDtoSchema,
+  YearDirectionDtoSchema,
+} from "./strategy";
+export type {
   CurrentActionDto,
   CurrentViewDto,
   PlanningContextDto,
+  ProjectProgressDto,
+  ProjectViewDto,
   StageWithActionsDto,
   WhyNowReasonDto,
 } from "./view";
@@ -176,6 +244,8 @@ export {
   CurrentActionDtoSchema,
   CurrentViewDtoSchema,
   PlanningContextDtoSchema,
+  ProjectProgressDtoSchema,
+  ProjectViewDtoSchema,
   StageWithActionsDtoSchema,
   WhyNowReasonSchema,
 } from "./view";

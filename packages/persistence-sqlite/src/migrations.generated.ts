@@ -133,5 +133,31 @@ export const MIGRATIONS: ReadonlyArray<{ tag: string; statements: readonly strin
     "statements": [
       "-- Custom SQL migration: distinguishes a Memory's Stage-6 Capture association (`source_capture_id`,\n-- settable by an AI-supplied argument from any session) from verified Capture provenance trusted by\n-- Stage 7 Pattern independence (`review-evidence.ts`) — only true when the link came from the trusted\n-- Capture-processing job context (`ctx.captureId`), never an untethered/interactive session's say-so\n-- (M-A, ADR-0008). Existing rows predate this column, and inside the shipped desktop app the only\n-- code path that ever set `source_capture_id` was the trusted Capture-processing job (the AI-supplied\n-- argument was always overridden by ctx.captureId when both were present, application.ts) — a\n-- developer's own interactive MCP session against the same real database file (the repo's `.mcp.json`,\n-- or a manually configured Claude Desktop chat per ADR-0004) could in principle have set an unverified\n-- one, but is not part of the shipped product's own behavior. Backfilled to verified rather than\n-- defaulted to unverified, which would silently drop real H2/H-A provenance the moment this migration\n-- runs against the owner's own database.\nALTER TABLE `memories` ADD `source_capture_verified` integer DEFAULT false NOT NULL;\nUPDATE `memories` SET `source_capture_verified` = 1 WHERE `source_capture_id` IS NOT NULL;"
     ]
+  },
+  {
+    "tag": "0017_stage8_full_map",
+    "statements": [
+      "CREATE TABLE `course_changes` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`level` text NOT NULL,\n\t`target_id` text NOT NULL,\n\t`summary` text NOT NULL,\n\t`changed_at` text NOT NULL,\n\t`resolved_at` text\n);",
+      "CREATE INDEX `course_changes_open_idx` ON `course_changes` (`resolved_at`);",
+      "CREATE TABLE `decade_plan_items` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`start_year` integer NOT NULL,\n\t`end_year` integer NOT NULL,\n\t`statement` text NOT NULL,\n\t`version` integer NOT NULL,\n\t`created_at` text NOT NULL,\n\t`updated_at` text NOT NULL,\n\tCONSTRAINT \"decade_range\" CHECK(\"decade_plan_items\".\"end_year\" >= \"decade_plan_items\".\"start_year\")\n);",
+      "CREATE INDEX `decade_plan_items_start_idx` ON `decade_plan_items` (`start_year`);",
+      "CREATE TABLE `routine_items` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`kind` text NOT NULL,\n\t`text` text NOT NULL,\n\t`position` integer NOT NULL,\n\t`active` integer NOT NULL,\n\t`version` integer NOT NULL,\n\t`created_at` text NOT NULL,\n\t`updated_at` text NOT NULL\n);",
+      "CREATE INDEX `routine_items_kind_idx` ON `routine_items` (`kind`,`position`);",
+      "CREATE TABLE `season_history` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`focus` text NOT NULL,\n\t`why_it_matters` text NOT NULL,\n\t`started_at` text NOT NULL,\n\t`ended_at` text NOT NULL\n);",
+      "CREATE TABLE `three_year_horizon` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`start_year` integer NOT NULL,\n\t`end_year` integer NOT NULL,\n\t`direction` text NOT NULL,\n\t`why_it_matters` text NOT NULL,\n\t`version` integer NOT NULL,\n\t`created_at` text NOT NULL,\n\t`updated_at` text NOT NULL,\n\tCONSTRAINT \"horizon_span\" CHECK(\"three_year_horizon\".\"end_year\" = \"three_year_horizon\".\"start_year\" + 2)\n);",
+      "CREATE UNIQUE INDEX `three_year_horizon_single_idx` ON `three_year_horizon` ((1));",
+      "CREATE TABLE `year_direction` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`year` integer NOT NULL,\n\t`direction` text NOT NULL,\n\t`why_it_matters` text NOT NULL,\n\t`version` integer NOT NULL,\n\t`created_at` text NOT NULL,\n\t`updated_at` text NOT NULL\n);",
+      "CREATE UNIQUE INDEX `year_direction_single_idx` ON `year_direction` ((1));",
+      "ALTER TABLE `intentions` ADD `why_it_matters` text DEFAULT '' NOT NULL;",
+      "ALTER TABLE `intentions` ADD `status` text DEFAULT 'active' NOT NULL;",
+      "ALTER TABLE `intentions` ADD `position` integer DEFAULT 0 NOT NULL;",
+      "ALTER TABLE `intentions` ADD `closed_at` text;",
+      "ALTER TABLE `season` ADD `why_it_matters` text DEFAULT '' NOT NULL;",
+      "ALTER TABLE `season` ADD `started_at` text DEFAULT '' NOT NULL;",
+      "-- Custom SQL (Stage 8, ADR-0009): backfills for rows that predate the new columns. Nothing is invented:\n-- the existing Season keeps its real start (the last owner-declared season change, else when it was created);\n-- an existing Intention was \"the active Intention\" of Stages 2-7, so it stays active and gets order 1.\nUPDATE `season` SET `started_at` = COALESCE((SELECT MAX(`timestamp`) FROM `change_log` WHERE `command_type` = 'season.changeSeason'), `created_at`);",
+      "UPDATE `intentions` SET `position` = (SELECT COUNT(*) FROM `intentions` AS `other` WHERE `other`.`created_at` < `intentions`.`created_at` OR (`other`.`created_at` = `intentions`.`created_at` AND `other`.`rowid` <= `intentions`.`rowid`));",
+      "-- The active-project limit is a database fact like captures.raw_text (migration 0011): no writer — Electron,\n-- MCP or a future one — can ever put a fourth Intention into the active state. MUST match MAX_ACTIVE_INTENTIONS.\nCREATE TRIGGER `intentions_active_limit_insert` BEFORE INSERT ON `intentions`\nWHEN NEW.`status` = 'active' AND (SELECT COUNT(*) FROM `intentions` WHERE `status` = 'active') >= 3\nBEGIN\n  SELECT RAISE(ABORT, 'at most 3 active intentions');\nEND;",
+      "CREATE TRIGGER `intentions_active_limit_update` BEFORE UPDATE OF `status` ON `intentions`\nWHEN NEW.`status` = 'active' AND OLD.`status` <> 'active' AND (SELECT COUNT(*) FROM `intentions` WHERE `status` = 'active') >= 3\nBEGIN\n  SELECT RAISE(ABORT, 'at most 3 active intentions');\nEND;"
+    ]
   }
 ];

@@ -1,6 +1,8 @@
 import type { CalendarSnapshotDto } from "@living-map/contracts";
 import type {
   Action,
+  CourseChange,
+  DecadePlanItem,
   GoodLifeCondition,
   Instant,
   Intention,
@@ -10,8 +12,12 @@ import type {
   Proposal,
   Review,
   ReviewFinding,
+  RoutineItem,
   Season,
+  SeasonHistoryEntry,
   Stage,
+  ThreeYearHorizon,
+  YearDirection,
 } from "@living-map/domain";
 import type { IdGenerator, Store } from "../src";
 
@@ -30,6 +36,13 @@ export function memoryStore(): Store & { revision: number; changes: string[]; ro
   const reviewFindingRows = new Map<string, ReviewFinding>();
   const patternRows = new Map<string, Pattern>();
   const planningRuleRows = new Map<string, PlanningRule>();
+  // Stage 8 aggregates (the real SQLite behaviour is exercised in persistence-sqlite/test/map.test.ts).
+  const seasonHistoryRows: SeasonHistoryEntry[] = [];
+  const decadeRows = new Map<string, DecadePlanItem>();
+  let horizonRow: ThreeYearHorizon | undefined;
+  let yearRow: YearDirection | undefined;
+  const routineRows = new Map<string, RoutineItem>();
+  const courseChangeRows = new Map<string, CourseChange>();
   let calendarRow: CalendarSnapshotDto = {
     connected: false,
     syncedAt: null,
@@ -50,6 +63,25 @@ export function memoryStore(): Store & { revision: number; changes: string[]; ro
     findByProposalId: () => undefined,
   };
   const memoriesReader = { list: () => [], listBySourceCaptures: () => [] };
+  const seasonHistoryReader = { list: () => [...seasonHistoryRows].reverse() };
+  const decadesReader = {
+    findById: (id: string) => decadeRows.get(id),
+    list: () => [...decadeRows.values()].sort((a, b) => a.startYear - b.startYear),
+  };
+  const routinesReader = {
+    findById: (id: string) => routineRows.get(id),
+    list: () =>
+      [...routineRows.values()].sort(
+        (a, b) => (a.kind === b.kind ? 0 : a.kind === "morning" ? -1 : 1) || a.position - b.position,
+      ),
+    listByKind: (kind: RoutineItem["kind"]) =>
+      [...routineRows.values()].filter((r) => r.kind === kind).sort((a, b) => a.position - b.position),
+  };
+  const courseChangesReader = {
+    findById: (id: string) => courseChangeRows.get(id),
+    listOpen: () => [...courseChangeRows.values()].filter((c) => c.resolvedAt === null),
+    listAll: () => [...courseChangeRows.values()],
+  };
   const plansReader = { findByIntention: (iid: string) => [...planRows.values()].find((p) => p.intentionId === iid) };
   const proposalsReader = {
     findById: (id: string) => proposalRows.get(id),
@@ -129,6 +161,12 @@ export function memoryStore(): Store & { revision: number; changes: string[]; ro
     read: <T>(work: Parameters<Store["read"]>[0]) =>
       work({
         season: { get: () => seasonRow },
+        seasonHistory: seasonHistoryReader,
+        decades: decadesReader,
+        horizon: { get: () => horizonRow },
+        year: { get: () => yearRow },
+        routines: routinesReader,
+        courseChanges: courseChangesReader,
         goodLifeConditions: { findById: (id) => glc.get(id), list: () => byPosition([...glc.values()]) },
         intentions: {
           findById: (id) => intentionRows.get(id),
@@ -179,6 +217,12 @@ export function memoryStore(): Store & { revision: number; changes: string[]; ro
         reviewFindingRows: new Map(reviewFindingRows),
         patternRows: new Map(patternRows),
         planningRuleRows: new Map(planningRuleRows),
+        seasonHistoryRows: [...seasonHistoryRows],
+        decadeRows: new Map(decadeRows),
+        horizonRow,
+        yearRow,
+        routineRows: new Map(routineRows),
+        courseChangeRows: new Map(courseChangeRows),
         calendarRow,
         revision: state.revision,
         changes: [...state.changes],
@@ -209,6 +253,16 @@ export function memoryStore(): Store & { revision: number; changes: string[]; ro
         for (const [k, v] of snapshot.patternRows) patternRows.set(k, v);
         planningRuleRows.clear();
         for (const [k, v] of snapshot.planningRuleRows) planningRuleRows.set(k, v);
+        seasonHistoryRows.length = 0;
+        seasonHistoryRows.push(...snapshot.seasonHistoryRows);
+        decadeRows.clear();
+        for (const [k, v] of snapshot.decadeRows) decadeRows.set(k, v);
+        horizonRow = snapshot.horizonRow;
+        yearRow = snapshot.yearRow;
+        routineRows.clear();
+        for (const [k, v] of snapshot.routineRows) routineRows.set(k, v);
+        courseChangeRows.clear();
+        for (const [k, v] of snapshot.courseChangeRows) courseChangeRows.set(k, v);
         state.revision = snapshot.revision;
         state.changes = snapshot.changes;
         changeLogRows.length = 0;
@@ -227,6 +281,72 @@ export function memoryStore(): Store & { revision: number; changes: string[]; ro
             updateIfVersion: (s, expected) => {
               if (seasonRow?.version !== expected) return false;
               seasonRow = s;
+              return true;
+            },
+          },
+          seasonHistory: { ...seasonHistoryReader, insert: (e) => void seasonHistoryRows.push(e) },
+          decades: {
+            ...decadesReader,
+            insert: (d) => void decadeRows.set(d.id, d),
+            updateIfVersion: (d, expected) => {
+              if (decadeRows.get(d.id)?.version !== expected) return false;
+              decadeRows.set(d.id, d);
+              return true;
+            },
+            removeIfVersion: (id, expected) => {
+              if (decadeRows.get(id)?.version !== expected) return false;
+              decadeRows.delete(id);
+              return true;
+            },
+          },
+          horizon: {
+            get: () => horizonRow,
+            insert: (h) => {
+              horizonRow = h;
+            },
+            updateIfVersion: (h, expected) => {
+              if (horizonRow?.version !== expected) return false;
+              horizonRow = h;
+              return true;
+            },
+          },
+          year: {
+            get: () => yearRow,
+            insert: (y) => {
+              yearRow = y;
+            },
+            updateIfVersion: (y, expected) => {
+              if (yearRow?.version !== expected) return false;
+              yearRow = y;
+              return true;
+            },
+          },
+          routines: {
+            ...routinesReader,
+            insert: (r) => void routineRows.set(r.id, r),
+            updateIfVersion: (r, expected) => {
+              if (routineRows.get(r.id)?.version !== expected) return false;
+              routineRows.set(r.id, r);
+              return true;
+            },
+            removeIfVersion: (id, expected) => {
+              if (routineRows.get(id)?.version !== expected) return false;
+              routineRows.delete(id);
+              return true;
+            },
+            reorder: (positions, now) => {
+              for (const [id, position] of positions) {
+                const cur = routineRows.get(id);
+                if (cur) routineRows.set(id, { ...cur, position, version: cur.version + 1, updatedAt: now });
+              }
+            },
+          },
+          courseChanges: {
+            ...courseChangesReader,
+            insert: (c) => void courseChangeRows.set(c.id, c),
+            resolveIfOpen: (c) => {
+              if (courseChangeRows.get(c.id)?.resolvedAt !== null) return false;
+              courseChangeRows.set(c.id, c);
               return true;
             },
           },
@@ -259,6 +379,12 @@ export function memoryStore(): Store & { revision: number; changes: string[]; ro
               if (intentionRows.get(i.id)?.version !== expected) return false;
               intentionRows.set(i.id, i);
               return true;
+            },
+            reorder: (positions, now) => {
+              for (const [id, position] of positions) {
+                const cur = intentionRows.get(id);
+                if (cur) intentionRows.set(id, { ...cur, position, updatedAt: now });
+              }
             },
           },
           stages: {

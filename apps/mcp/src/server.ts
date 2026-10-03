@@ -75,7 +75,7 @@ export function createLivingMapMcpServer(
     "get_living_map_context",
     {
       description:
-        "Read the user's whole current planning reality in one call: stateRevision, Season focus, «Чем ты не хочешь жертвовать ради целей?» (hard constraints), the active Intention with its desired result, Stages, Actions (status, doneWhen, blockers), the approved OrderedActionPlan, unplanned actions, pending proposals and recent history. `meanings` explains what every concept means to the user and what you may and may not change — read it first.",
+        "Read the user's whole current planning reality in one call: stateRevision, the one causal line of their life (strategy: sparse decade plan → next 3 years → this year; season = the Season's main goal), «Чем ты не хочешь жертвовать ради целей?» (hard constraints), the active projects (`projects`, up to three, each with its desired result, Stages, Actions with status/doneWhen/blockers, approved OrderedActionPlan and honest progress; `intention`/`stages`/`orderedActionPlan` mirror the focus project), unplanned actions, pending proposals, confirmed planning rules and recent history. `meanings` explains what every concept means to the user and what you may and may not change — read it first. Everything strategic here is read-only for you.",
       annotations: read,
     },
     () => run((ai) => ai.getPlanningContext()),

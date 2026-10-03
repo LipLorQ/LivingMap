@@ -14,6 +14,8 @@ const api: LivingMapApi = {
     getReview: (input) => ipcRenderer.invoke(IPC_CHANNELS.getReview, input),
     listPatternCandidates: (input) => ipcRenderer.invoke(IPC_CHANNELS.listPatternCandidates, input),
     listPlanningRules: (input) => ipcRenderer.invoke(IPC_CHANNELS.listPlanningRules, input),
+    getStrategyHistory: () => ipcRenderer.invoke(IPC_CHANNELS.getStrategyHistory),
+    previewCourseImpact: (input) => ipcRenderer.invoke(IPC_CHANNELS.previewCourseImpact, input),
   },
   commands: {
     createSeason: (input) => ipcRenderer.invoke(IPC_CHANNELS.createSeason, input),
@@ -53,6 +55,15 @@ const api: LivingMapApi = {
     confirmPattern: (input) => ipcRenderer.invoke(IPC_CHANNELS.confirmPattern, input),
     rejectPattern: (input) => ipcRenderer.invoke(IPC_CHANNELS.rejectPattern, input),
     deactivatePlanningRule: (input) => ipcRenderer.invoke(IPC_CHANNELS.deactivatePlanningRule, input),
+    saveStrategy: (input) => ipcRenderer.invoke(IPC_CHANNELS.saveStrategy, input),
+    removeDecadeItem: (input) => ipcRenderer.invoke(IPC_CHANNELS.removeDecadeItem, input),
+    resolveCourseChange: (input) => ipcRenderer.invoke(IPC_CHANNELS.resolveCourseChange, input),
+    changeIntentionStatus: (input) => ipcRenderer.invoke(IPC_CHANNELS.changeIntentionStatus, input),
+    reorderProjects: (input) => ipcRenderer.invoke(IPC_CHANNELS.reorderProjects, input),
+    addRoutineItem: (input) => ipcRenderer.invoke(IPC_CHANNELS.addRoutineItem, input),
+    editRoutineItem: (input) => ipcRenderer.invoke(IPC_CHANNELS.editRoutineItem, input),
+    removeRoutineItem: (input) => ipcRenderer.invoke(IPC_CHANNELS.removeRoutineItem, input),
+    reorderRoutineItems: (input) => ipcRenderer.invoke(IPC_CHANNELS.reorderRoutineItems, input),
   },
   events: {
     onStateChanged: (listener) => {

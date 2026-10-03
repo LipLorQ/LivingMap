@@ -19,6 +19,19 @@ export const COMMAND_POLICY = {
   "goodLifeCondition.reorder": ["user-ui", "system"],
   "intention.create": ["user-ui", "system"],
   "intention.update": ["user-ui", "system"],
+  // Stage 8: a project's lifecycle and order are strategic — activating, pausing, completing or releasing
+  // one is the owner's decision (no mcp-ai entry: the AI can only suggest it in words).
+  "intention.changeStatus": ["user-ui", "system"],
+  "intention.reorder": ["user-ui", "system"],
+  // Stage 8: the far layers (decades, 3-year horizon, year) and their courses of change belong to the owner alone.
+  "strategy.save": ["user-ui", "system"],
+  "strategy.remove": ["user-ui", "system"],
+  "strategy.resolveCourseChange": ["user-ui", "system"],
+  // Stage 8: daily routines are the owner's stable infrastructure of the day; the AI neither reads nor edits them.
+  "routine.add": ["user-ui", "system"],
+  "routine.edit": ["user-ui", "system"],
+  "routine.remove": ["user-ui", "system"],
+  "routine.reorder": ["user-ui", "system"],
   "stage.add": ["user-ui", "system"],
   "stage.edit": ["user-ui", "system"],
   "stage.reorder": ["user-ui", "system"],

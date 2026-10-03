@@ -3,6 +3,8 @@ import type {
   Action,
   Capture,
   CaptureState,
+  CourseChange,
+  DecadePlanItem,
   EntityId,
   GoodLifeCondition,
   Instant,
@@ -15,10 +17,15 @@ import type {
   Review,
   ReviewFinding,
   ReviewType,
+  RoutineItem,
+  RoutineKind,
   Season,
+  SeasonHistoryEntry,
   Stage,
+  ThreeYearHorizon,
   Version,
   WorkInterval,
+  YearDirection,
 } from "@living-map/domain";
 
 export interface Clock {
@@ -39,6 +46,76 @@ export interface SeasonRepository extends SeasonReader {
   updateIfVersion(season: Season, expectedVersion: Version): boolean;
 }
 
+/** Past seasons (Stage 8): written once, when a season really turns; never edited. */
+export interface SeasonHistoryReader {
+  /** Newest first. */
+  list(): SeasonHistoryEntry[];
+}
+
+export interface SeasonHistoryRepository extends SeasonHistoryReader {
+  insert(entry: SeasonHistoryEntry): void;
+}
+
+export interface DecadePlanReader {
+  findById(id: EntityId): DecadePlanItem | undefined;
+  /** Ordered by start year. */
+  list(): DecadePlanItem[];
+}
+
+export interface DecadePlanRepository extends DecadePlanReader {
+  insert(item: DecadePlanItem): void;
+  updateIfVersion(item: DecadePlanItem, expectedVersion: Version): boolean;
+  removeIfVersion(id: EntityId, expectedVersion: Version): boolean;
+}
+
+/** At most one row exists — "one current 3-year horizon" is also a database fact. */
+export interface HorizonReader {
+  get(): ThreeYearHorizon | undefined;
+}
+
+export interface HorizonRepository extends HorizonReader {
+  insert(horizon: ThreeYearHorizon): void;
+  updateIfVersion(horizon: ThreeYearHorizon, expectedVersion: Version): boolean;
+}
+
+/** At most one row exists — "one current year direction". */
+export interface YearDirectionReader {
+  get(): YearDirection | undefined;
+}
+
+export interface YearDirectionRepository extends YearDirectionReader {
+  insert(year: YearDirection): void;
+  updateIfVersion(year: YearDirection, expectedVersion: Version): boolean;
+}
+
+export interface RoutineReader {
+  findById(id: EntityId): RoutineItem | undefined;
+  /** Morning items first, then evening, each by position. */
+  list(): RoutineItem[];
+  listByKind(kind: RoutineKind): RoutineItem[];
+}
+
+export interface RoutineRepository extends RoutineReader {
+  insert(item: RoutineItem): void;
+  updateIfVersion(item: RoutineItem, expectedVersion: Version): boolean;
+  removeIfVersion(id: EntityId, expectedVersion: Version): boolean;
+  reorder(positions: ReadonlyMap<EntityId, number>, now: Instant): void;
+}
+
+export interface CourseChangeReader {
+  findById(id: EntityId): CourseChange | undefined;
+  /** Not yet resolved by the owner, oldest first. */
+  listOpen(): CourseChange[];
+  /** Every one ever recorded: their ids are part of the planning fingerprint, so a change of course stales pending proposals. */
+  listAll(): CourseChange[];
+}
+
+export interface CourseChangeRepository extends CourseChangeReader {
+  insert(change: CourseChange): void;
+  /** Persists `resolvedAt` only if the stored row is still open; false otherwise. */
+  resolveIfOpen(change: CourseChange): boolean;
+}
+
 export interface GoodLifeConditionReader {
   findById(id: EntityId): GoodLifeCondition | undefined;
   list(): GoodLifeCondition[];
@@ -54,13 +131,16 @@ export interface GoodLifeConditionRepository extends GoodLifeConditionReader {
 
 export interface IntentionReader {
   findById(id: EntityId): Intention | undefined;
-  /** At most one row exists in this stage; multi-Intention UX is future work (ARCHITECTURE-approved). */
+  /** Every Intention in every lifecycle state, oldest first. */
   list(): Intention[];
 }
 
 export interface IntentionRepository extends IntentionReader {
   insert(intention: Intention): void;
+  /** Persists title, result, why, status, position and closedAt. */
   updateIfVersion(intention: Intention, expectedVersion: Version): boolean;
+  /** Manual order of the active projects: a full position replace (no version bump — order is not content). */
+  reorder(positions: ReadonlyMap<EntityId, number>, now: Instant): void;
 }
 
 export interface StageReader {
@@ -364,6 +444,12 @@ export interface ChangeLogReader {
 
 export interface ReadScope {
   season: SeasonReader;
+  seasonHistory: SeasonHistoryReader;
+  decades: DecadePlanReader;
+  horizon: HorizonReader;
+  year: YearDirectionReader;
+  routines: RoutineReader;
+  courseChanges: CourseChangeReader;
   goodLifeConditions: GoodLifeConditionReader;
   intentions: IntentionReader;
   stages: StageReader;
@@ -385,6 +471,12 @@ export interface ReadScope {
 
 export interface WriteScope {
   season: SeasonRepository;
+  seasonHistory: SeasonHistoryRepository;
+  decades: DecadePlanRepository;
+  horizon: HorizonRepository;
+  year: YearDirectionRepository;
+  routines: RoutineRepository;
+  courseChanges: CourseChangeRepository;
   goodLifeConditions: GoodLifeConditionRepository;
   intentions: IntentionRepository;
   stages: StageRepository;

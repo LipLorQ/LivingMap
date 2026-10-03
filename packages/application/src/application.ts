@@ -3,16 +3,19 @@ import {
   type ActionDto,
   type AddActionInput,
   type AddGoodLifeConditionInput,
+  type AddRoutineItemInput,
   type AddStageInput,
   AiFailureSchema,
   type BlockActionInput,
   type CalendarSnapshotDto,
   CaptureAiResultSchema,
   type CaptureDto,
+  type ChangeIntentionStatusInput,
   type ChangeLogEntryDto,
   type CompleteActionInput,
   type ConfirmPatternInput,
   type CorrectReviewFindingInput,
+  type CourseImpactDto,
   type CreateIntentionInput,
   type CreateRouteProposalInput,
   type CreateSeasonInput,
@@ -20,6 +23,7 @@ import {
   type DeactivatePlanningRuleInput,
   type EditActionInput,
   type EditGoodLifeConditionInput,
+  type EditRoutineItemInput,
   type EditStageInput,
   type ExecutionDto,
   err,
@@ -39,16 +43,22 @@ import {
   type PatternDto,
   type PlanningContextDto,
   type PlanningRuleDto,
+  type PreviewCourseImpactInput,
   type ProposalDto,
   type ProposeDesiredResultChangeInput,
   type RejectPatternInput,
   type RejectReviewFindingInput,
+  type RemoveDecadeItemInput,
   type RemoveGoodLifeConditionInput,
+  type RemoveRoutineItemInput,
   type ReopenActionInput,
   type ReorderActionsInput,
   type ReorderExistingActionsInput,
   type ReorderGoodLifeConditionsInput,
+  type ReorderProjectsInput,
+  type ReorderRoutineItemsInput,
   type ReorderStagesInput,
+  type ResolveCourseChangeInput,
   type ResolveProposalInput,
   type Result,
   type RetryCaptureInput,
@@ -59,13 +69,16 @@ import {
   type ReviewInboxDto,
   type ReviewWithFindingsDto,
   type RoutePayload,
+  type RoutineItemDto,
   type SaveMemoryInput,
+  type SaveStrategyInput,
   type SearchMemoryInput,
   type SeasonDto,
   type SetCurrentStageInput,
   type SetDailyWorkTargetInput,
   type StageDto,
   type StateRevisionDto,
+  type StrategyHistoryDto,
   type SubmitCaptureInput,
   type UnblockActionInput,
   type UpdateIntentionInput,
@@ -73,23 +86,28 @@ import {
   type WorkActionInput,
 } from "@living-map/contracts";
 import {
-  type Action,
   acceptedFindingText,
   acceptFinding,
+  activeIntentions,
   addDays,
   applyRouteChange,
-  type Blocker,
   blockAction,
   CAPTURE_AUTO_RETRY_ATTEMPTS,
   type Capture,
+  type CourseLevel,
+  changeIntentionStatus,
   closeAt,
   completeAction,
+  computeCourseImpact,
   computeReorder,
   confirmPattern,
   correctFinding,
   createAction,
   createCapture,
+  createCourseChange,
+  createDecadeItem,
   createGoodLifeCondition,
+  createHorizon,
   createIntention,
   createMemory,
   createPatternCandidate,
@@ -98,23 +116,30 @@ import {
   createProposal,
   createReview,
   createReviewFinding,
+  createRoutineItem,
   createSeason,
   createStage,
+  createYearDirection,
   deactivatePlanningRule,
   type EntityId,
   editAction,
   editGoodLifeCondition,
   editIntention,
+  editRoutineItem,
   editStageTitle,
   type GoodLifeCondition,
   growPatternCandidate,
+  hasRoomForActive,
+  type ImpactItem,
   type Instant,
-  type Intention,
+  impactFingerprint,
   isAtVersion,
   isSilent,
   localDate,
+  MAX_ACTIVE_INTENTIONS,
   MAX_PENDING_PROPOSALS,
   type Memory,
+  nextActivePosition,
   type Pattern,
   type PlanningRule,
   type Proposal,
@@ -127,13 +152,18 @@ import {
   rejectPattern,
   reopenAction,
   replacePlanOrder,
+  resolveCourseChange,
   resolveProposal,
-  type Season,
-  type Stage,
+  reviseDecadeItem,
+  reviseHorizon,
+  reviseYearDirection,
+  rewordDecadeItem,
+  rewordHorizon,
+  rewordSeason,
+  rewordYearDirection,
+  startNewSeason,
   totalWorkedMs,
   unblockAction,
-  unplannedActionIds,
-  updateSeasonFocus,
   validateActionOrder,
   WORK_HEARTBEAT_GAP_MS,
   type WorkInterval,
@@ -142,7 +172,21 @@ import {
 } from "@living-map/domain";
 import { type Actor, type CommandContext, type CommandSource, createCommandContext } from "./context";
 import {
-  computeCurrentAction,
+  loadFocusState,
+  openProjectSnapshots,
+  snapshotOf,
+  strategyState,
+  toActionDto,
+  toCourseImpactDto,
+  toIntentionDto,
+  toProjectViewDto,
+  toRoutineItemDto,
+  toSeasonDto,
+  toStageDto,
+  toStrategyDto,
+  toStrategyHistoryDto,
+} from "./map";
+import {
   contextFingerprint,
   intentionTree,
   PLANNING_MEANINGS,
@@ -178,12 +222,7 @@ export type ApplicationDeps = {
 
 export { WORK_HEARTBEAT_GAP_MS };
 
-const toSeasonDto = (season: Season): SeasonDto => ({ ...season });
 const toGoodLifeConditionDto = (c: GoodLifeCondition): GoodLifeConditionDto => ({ ...c });
-const toIntentionDto = (intention: Intention): IntentionDto => ({ ...intention });
-const toStageDto = (stage: Stage): StageDto => ({ ...stage });
-const toBlockerDto = (blocker: Blocker | null) => (blocker ? { ...blocker } : null);
-const toActionDto = (action: Action): ActionDto => ({ ...action, blocker: toBlockerDto(action.blocker) });
 const toChangeLogEntryDto = (entry: ChangeLogEntry): ChangeLogEntryDto => ({ ...entry });
 // sourceCaptureVerified (M-A) is internal Pattern-provenance bookkeeping, never exposed on the DTO.
 const toMemoryDto = (m: Memory): MemoryDto => ({
@@ -323,42 +362,33 @@ export function createApplication(deps: ApplicationDeps) {
 
   function currentView(s: ReadScope): CurrentViewDto {
     const season = s.season.get();
-    const intention = s.intentions.list()[0];
-    const stages = intention ? s.stages.listByIntention(intention.id) : [];
-    // One batched query for every Stage's actions instead of one query per Stage: this view is
-    // re-fetched after every write (via the revision watcher), so an N+1 here would recur continuously.
-    const actions = s.actions.listByStages(stages.map((stage) => stage.id));
-    const actionsByStage = new Map<string, ActionDto[]>();
-    for (const action of actions) {
-      const list = actionsByStage.get(action.stageId) ?? [];
-      list.push(toActionDto(action));
-      actionsByStage.set(action.stageId, list);
-    }
-    const plan = intention ? s.plans.findByIntention(intention.id) : undefined;
     const now = clock.now();
-    const calendarSnapshot = s.calendar.get();
-    const { currentAction, needsAiReplan } = computeCurrentAction(
-      intention,
-      actions,
-      plan,
-      calendarSnapshot,
-      now,
-      workingActionId(s, now),
-    );
+    const tz = timeZone();
+    // One batched query per project instead of one per Stage: this view is re-fetched after every write
+    // (via the revision watcher), so an N+1 here would recur continuously.
+    const focusState = loadFocusState(s, now, workingActionId(s, now));
+    const { focus, currentAction, needsAiReplan } = focusState;
+    const focusView = focus ? toProjectViewDto(focus) : undefined;
+    const activeCount = focusState.projects.filter((p) => p.intention.status === "active").length;
+    const snapshots = focusState.projects.map((p) => snapshotOf(p.intention, p.stages, p.actions));
     return {
       season: season ? toSeasonDto(season) : null,
       goodLifeConditions: s.goodLifeConditions.list().map(toGoodLifeConditionDto),
-      intention: intention ? toIntentionDto(intention) : null,
-      stages: stages.map((stage) => ({ ...toStageDto(stage), actions: actionsByStage.get(stage.id) ?? [] })),
-      orderedActionPlan: plan ? toPlanDto(plan) : null,
-      unplannedActionIds: plan ? unplannedActionIds(plan, actions) : [],
+      intention: focusView?.intention ?? null,
+      stages: focusView?.stages ?? [],
+      orderedActionPlan: focusView?.orderedActionPlan ?? null,
+      unplannedActionIds: focusView?.unplannedActionIds ?? [],
+      projects: focusState.projects.map(toProjectViewDto),
+      projectSlots: { active: activeCount, max: MAX_ACTIVE_INTENTIONS },
+      strategy: toStrategyDto(s, strategyState(s, snapshots, now, tz), s.intentions.list(), tz),
+      routines: s.routines.list().map(toRoutineItemDto),
       pendingProposals: s.proposals
         .listPending()
         .map((p) => toProposalDto(s, p, now))
         .filter((p): p is ProposalDto => p !== undefined),
       currentAction,
       needsAiReplan,
-      calendarSnapshot,
+      calendarSnapshot: s.calendar.get(),
       execution: execution(s, currentAction?.actionId ?? null, now),
       reviewInbox: reviewInbox(s),
     };
@@ -384,15 +414,7 @@ export function createApplication(deps: ApplicationDeps) {
 
   /** The `Сейчас` Action as the view would show it — the only Action work may start on. */
   function currentActionId(s: ReadScope | WriteScope, now: Instant): EntityId | null {
-    const intention = s.intentions.list()[0];
-    if (!intention) return null;
-    const stages = s.stages.listByIntention(intention.id);
-    const actions = s.actions.listByStages(stages.map((stage) => stage.id));
-    const plan = s.plans.findByIntention(intention.id);
-    return (
-      computeCurrentAction(intention, actions, plan, s.calendar.get(), now, workingActionId(s, now)).currentAction
-        ?.actionId ?? null
-    );
+    return loadFocusState(s, now, workingActionId(s, now)).currentAction?.actionId ?? null;
   }
 
   function execution(s: Pick<ReadScope, "work" | "settings">, actionId: EntityId | null, now: Instant): ExecutionDto {
@@ -694,6 +716,250 @@ export function createApplication(deps: ApplicationDeps) {
     });
   }
 
+  /** Work running on a project that leaves the active state ends in the same transaction (like Готово/Block). */
+  function stopWorkInProject(s: WriteScope, intentionId: EntityId, at: Instant): void {
+    const running = s.work.findRunning();
+    if (!running) return;
+    const action = s.actions.findById(running.actionId);
+    const stage = action && s.stages.findById(action.stageId);
+    if (stage?.intentionId === intentionId) s.work.closeIfRunning(running.id, closeAt(running, at));
+  }
+
+  /**
+   * MODE B gate (Stage 8 §12): a change of course is applied only against the exact impact the owner was
+   * shown. With nothing below to affect there is nothing to confirm. Nothing below is ever rewritten.
+   */
+  function gateCourse(
+    s: WriteScope,
+    level: CourseLevel,
+    targetId: EntityId | null,
+    fingerprint: string | undefined,
+    proposed?: { startYear: number; endYear: number },
+  ): Result<ImpactItem[]> {
+    const state = strategyState(s, openProjectSnapshots(s), clock.now(), timeZone());
+    const impact = computeCourseImpact(state, level, targetId, proposed);
+    if (impact.length > 0 && fingerprint !== impactFingerprint(impact)) {
+      return err(
+        "REQUIRES_CONFIRMATION",
+        "A change of course must be confirmed against the impact the owner has seen; preview it first",
+      );
+    }
+    return ok(impact);
+  }
+
+  /** Keeps «посмотреть, что нужно пересобрать» alive after a change of course that actually affects something. */
+  function recordCourseChange(
+    s: WriteScope,
+    level: CourseLevel,
+    targetId: EntityId,
+    summary: string,
+    impact: readonly ImpactItem[],
+  ): void {
+    if (impact.length === 0) return;
+    const created = createCourseChange({ id: ids.next(), level, targetId, summary, now: clock.now() });
+    if (created.ok) s.courseChanges.insert(created.value);
+  }
+
+  /**
+   * One owner edit of the decade plan / 3-year horizon / year. Adding needs nothing more. Editing something
+   * that exists is either MODE A (`wording`: same meaning, only the words — years untouched, nothing else
+   * looked at) or MODE B (`course`: the meaning changes — applied only against the shown impact). Nothing
+   * below is ever rewritten; at most a course-change reminder is recorded.
+   */
+  function saveStrategyTx(s: WriteScope, input: SaveStrategyInput): Result<null> {
+    const now = clock.now();
+    const conflict = (version?: number) =>
+      err<null>(
+        "CONFLICT_RELOAD",
+        version === undefined
+          ? "Changed concurrently; reload and retry"
+          : `Changed (now v${version}); reload and retry`,
+      );
+    const needMode = err<null>("VALIDATION_ERROR", "Say whether this is a wording edit or a change of course");
+    const yearsMeanCourse = err<null>(
+      "VALIDATION_ERROR",
+      "Changing the years changes the course, not just the wording",
+    );
+
+    if (input.level === "decade") {
+      const all = s.decades.list();
+      if (input.id === undefined) {
+        const created = createDecadeItem({
+          id: ids.next(),
+          startYear: input.startYear,
+          endYear: input.endYear,
+          statement: input.statement,
+          others: all,
+          now,
+        });
+        if (!created.ok) return err("VALIDATION_ERROR", created.reason);
+        s.decades.insert(created.value);
+        s.recordChange({
+          commandType: "strategy.decade.add",
+          entityType: "decade",
+          entityId: created.value.id,
+          summary: `${created.value.startYear}–${created.value.endYear}: ${created.value.statement}`,
+        });
+        return ok(null);
+      }
+      const current = all.find((d) => d.id === input.id);
+      if (!current) return err("NOT_FOUND", "Decade item not found");
+      if (input.expectedVersion === undefined || !isAtVersion(current, input.expectedVersion)) {
+        return conflict(current.version);
+      }
+      if (input.mode === undefined) return needMode;
+      if (input.mode === "wording") {
+        if (input.startYear !== current.startYear || input.endYear !== current.endYear) return yearsMeanCourse;
+        const next = rewordDecadeItem(current, input.statement, now);
+        if (!next.ok) return err("VALIDATION_ERROR", next.reason);
+        if (!s.decades.updateIfVersion(next.value, input.expectedVersion)) return conflict();
+        s.recordChange({
+          commandType: "strategy.decade.reword",
+          entityType: "decade",
+          entityId: current.id,
+          summary: next.value.statement,
+        });
+        return ok(null);
+      }
+      const gate = gateCourse(s, "decade", current.id, input.impactFingerprint, {
+        startYear: input.startYear,
+        endYear: input.endYear,
+      });
+      if (!gate.ok) return gate;
+      const next = reviseDecadeItem(
+        current,
+        { startYear: input.startYear, endYear: input.endYear, statement: input.statement },
+        all.filter((d) => d.id !== current.id),
+        now,
+      );
+      if (!next.ok) return err("VALIDATION_ERROR", next.reason);
+      if (!s.decades.updateIfVersion(next.value, input.expectedVersion)) return conflict();
+      s.recordChange({
+        commandType: "strategy.decade.course",
+        entityType: "decade",
+        entityId: current.id,
+        summary: `${next.value.startYear}–${next.value.endYear}: ${next.value.statement}`,
+      });
+      recordCourseChange(s, "decade", current.id, next.value.statement, gate.value);
+      return ok(null);
+    }
+
+    if (input.level === "horizon") {
+      const current = s.horizon.get();
+      if (!current) {
+        if (input.expectedVersion !== undefined) return err("NOT_FOUND", "The 3-year horizon is not set yet");
+        const created = createHorizon({
+          id: ids.next(),
+          startYear: input.startYear,
+          direction: input.direction,
+          whyItMatters: input.whyItMatters,
+          now,
+        });
+        if (!created.ok) return err("VALIDATION_ERROR", created.reason);
+        s.horizon.insert(created.value);
+        s.recordChange({
+          commandType: "strategy.horizon.set",
+          entityType: "horizon",
+          entityId: created.value.id,
+          summary: created.value.direction,
+        });
+        return ok(null);
+      }
+      if (input.expectedVersion === undefined || !isAtVersion(current, input.expectedVersion)) {
+        return conflict(current.version);
+      }
+      if (input.mode === undefined) return needMode;
+      if (input.mode === "wording") {
+        if (input.startYear !== current.startYear) return yearsMeanCourse;
+        const next = rewordHorizon(current, { direction: input.direction, whyItMatters: input.whyItMatters }, now);
+        if (!next.ok) return err("VALIDATION_ERROR", next.reason);
+        if (!s.horizon.updateIfVersion(next.value, input.expectedVersion)) return conflict();
+        s.recordChange({
+          commandType: "strategy.horizon.reword",
+          entityType: "horizon",
+          entityId: current.id,
+          summary: next.value.direction,
+        });
+        return ok(null);
+      }
+      const gate = gateCourse(s, "horizon", current.id, input.impactFingerprint);
+      if (!gate.ok) return gate;
+      const next = reviseHorizon(
+        current,
+        { startYear: input.startYear, direction: input.direction, whyItMatters: input.whyItMatters },
+        now,
+      );
+      if (!next.ok) return err("VALIDATION_ERROR", next.reason);
+      if (!s.horizon.updateIfVersion(next.value, input.expectedVersion)) return conflict();
+      s.recordChange({
+        commandType: "strategy.horizon.course",
+        entityType: "horizon",
+        entityId: current.id,
+        summary: next.value.direction,
+      });
+      recordCourseChange(s, "horizon", current.id, next.value.direction, gate.value);
+      return ok(null);
+    }
+
+    const current = s.year.get();
+    if (!current) {
+      if (input.expectedVersion !== undefined) return err("NOT_FOUND", "The year direction is not set yet");
+      const created = createYearDirection({
+        id: ids.next(),
+        year: input.year,
+        direction: input.direction,
+        whyItMatters: input.whyItMatters,
+        now,
+      });
+      if (!created.ok) return err("VALIDATION_ERROR", created.reason);
+      s.year.insert(created.value);
+      s.recordChange({
+        commandType: "strategy.year.set",
+        entityType: "year",
+        entityId: created.value.id,
+        summary: created.value.direction,
+      });
+      return ok(null);
+    }
+    if (input.expectedVersion === undefined || !isAtVersion(current, input.expectedVersion)) {
+      return conflict(current.version);
+    }
+    if (input.mode === undefined) return needMode;
+    if (input.mode === "wording") {
+      if (input.year !== current.year) return yearsMeanCourse;
+      const next = rewordYearDirection(current, { direction: input.direction, whyItMatters: input.whyItMatters }, now);
+      if (!next.ok) return err("VALIDATION_ERROR", next.reason);
+      if (!s.year.updateIfVersion(next.value, input.expectedVersion)) return conflict();
+      s.recordChange({
+        commandType: "strategy.year.reword",
+        entityType: "year",
+        entityId: current.id,
+        summary: next.value.direction,
+      });
+      return ok(null);
+    }
+    const gate = gateCourse(s, "year", current.id, input.impactFingerprint);
+    if (!gate.ok) return gate;
+    const next = reviseYearDirection(
+      current,
+      { year: input.year, direction: input.direction, whyItMatters: input.whyItMatters },
+      now,
+    );
+    if (!next.ok) return err("VALIDATION_ERROR", next.reason);
+    if (!s.year.updateIfVersion(next.value, input.expectedVersion)) return conflict();
+    s.recordChange({
+      commandType: "strategy.year.course",
+      entityType: "year",
+      entityId: current.id,
+      summary: next.value.direction,
+    });
+    recordCourseChange(s, "year", current.id, next.value.direction, gate.value);
+    return ok(null);
+  }
+
+  const notActive = () =>
+    err<never>("VALIDATION_ERROR", "The project is not active; only an active project can be planned");
+
   return {
     newContext: (actor: Actor, source: CommandSource): CommandContext =>
       createCommandContext({ clock, ids }, actor, source),
@@ -713,26 +979,57 @@ export function createApplication(deps: ApplicationDeps) {
           ok(store.read((s) => s.goodLifeConditions.list()).map(toGoodLifeConditionDto)),
         ),
 
+      /** The project that leads `Сейчас` (the first active one in the owner's order), if any. */
       getActiveIntention: (): Result<IntentionDto | null> =>
         guarded("getActiveIntention", () => {
-          const active = store.read((s) => s.intentions.list()[0]);
+          const active = store.read((s) => activeIntentions(s.intentions.list())[0]);
           return ok(active ? toIntentionDto(active) : null);
         }),
 
       getCurrentView: (): Result<CurrentViewDto> => guarded("getCurrentView", () => ok(store.read(currentView))),
 
-      /** One coherent planning snapshot for an external AI (MCP get_living_map_context). */
+      /**
+       * One coherent planning snapshot for an external AI (MCP get_living_map_context). Daily routines are
+       * deliberately left out: they are the owner's stable infrastructure of the day, not strategic context.
+       */
       getPlanningContext: (): Result<PlanningContextDto> =>
         guarded("getPlanningContext", () =>
           ok(
-            store.read((s) => ({
-              stateRevision: s.stateRevision(),
-              meanings: PLANNING_MEANINGS,
-              ...currentView(s),
-              recentHistory: s.changeLog.listRecent(30).map(toChangeLogEntryDto),
-              activePlanningRules: s.planningRules.listActive().map(toPlanningRuleDto),
-            })),
+            store.read((s) => {
+              const { routines: _routines, ...view } = currentView(s);
+              return {
+                stateRevision: s.stateRevision(),
+                meanings: PLANNING_MEANINGS,
+                ...view,
+                recentHistory: s.changeLog.listRecent(30).map(toChangeLogEntryDto),
+                activePlanningRules: s.planningRules.listActive().map(toPlanningRuleDto),
+              };
+            }),
           ),
+        ),
+
+      /** Past seasons and the projects closed during the current one (Full Map history). Desktop only. */
+      getStrategyHistory: (): Result<StrategyHistoryDto> =>
+        guarded("getStrategyHistory", () => ok(store.read(toStrategyHistoryDto))),
+
+      /**
+       * What a change of course at `level` may affect, with the fingerprint the owner must hand back to
+       * confirm it. Pure read: it describes, it never rewrites anything below.
+       */
+      previewCourseImpact: (input: PreviewCourseImpactInput): Result<CourseImpactDto> =>
+        guarded("previewCourseImpact", () =>
+          store.read((s) => {
+            if (input.level === "decade" && input.targetId && !s.decades.findById(input.targetId)) {
+              return err("NOT_FOUND", "Decade item not found");
+            }
+            const state = strategyState(s, openProjectSnapshots(s), clock.now(), timeZone());
+            const proposed =
+              input.level === "decade" && input.startYear !== undefined && input.endYear !== undefined
+                ? { startYear: input.startYear, endYear: input.endYear }
+                : undefined;
+            const items = computeCourseImpact(state, input.level, input.targetId ?? null, proposed);
+            return ok(toCourseImpactDto(input.level, input.targetId ?? null, items));
+          }),
         ),
 
       getProposal: (input: GetProposalInput): Result<ProposalDto> =>
@@ -806,7 +1103,12 @@ export function createApplication(deps: ApplicationDeps) {
         guarded("createSeason", () =>
           transact(ctx, (s): Result<SeasonDto> => {
             if (s.season.get()) return err("VALIDATION_ERROR", "A season already exists; use updateSeasonFocus");
-            const created = createSeason({ id: ids.next(), focus: input.focus, now: clock.now() });
+            const created = createSeason({
+              id: ids.next(),
+              focus: input.focus,
+              whyItMatters: input.whyItMatters,
+              now: clock.now(),
+            });
             if (!created.ok) return err("VALIDATION_ERROR", created.reason);
             s.season.insert(created.value);
             s.recordChange({
@@ -828,22 +1130,45 @@ export function createApplication(deps: ApplicationDeps) {
             if (!isAtVersion(current, input.expectedVersion)) {
               return err("CONFLICT_RELOAD", `Season changed (now v${current.version}); reload and retry`);
             }
-            const updated = updateSeasonFocus(current, input.focus, clock.now());
-            if (!updated.ok) return err("VALIDATION_ERROR", updated.reason);
-            if (!s.season.updateIfVersion(updated.value, input.expectedVersion)) {
+            const now = clock.now();
+            // A wording edit (MODE A) and an actual season change (MODE B) are recorded under different
+            // commandTypes (M2 fix): only `season.changeSeason` is a seasonal-Review boundary
+            // (`SEASON_COMMANDS`, review-evidence.ts) — the owner says which this is, since the system
+            // cannot reliably infer "still the same stretch of life, reworded" from "the season turned".
+            if (!input.startsNewSeason) {
+              const reworded = rewordSeason(current, { focus: input.focus, whyItMatters: input.whyItMatters }, now);
+              if (!reworded.ok) return err("VALIDATION_ERROR", reworded.reason);
+              if (!s.season.updateIfVersion(reworded.value, input.expectedVersion)) {
+                return err("CONFLICT_RELOAD", "Season changed concurrently; reload and retry");
+              }
+              s.recordChange({
+                commandType: "season.updateFocus",
+                entityType: "season",
+                entityId: current.id,
+                summary: `v${current.version}→v${reworded.value.version}`,
+              });
+              return ok(toSeasonDto(reworded.value));
+            }
+            const gate = gateCourse(s, "season", current.id, input.impactFingerprint);
+            if (!gate.ok) return gate;
+            const turned = startNewSeason(
+              current,
+              { focus: input.focus, whyItMatters: input.whyItMatters, historyId: ids.next() },
+              now,
+            );
+            if (!turned.ok) return err("VALIDATION_ERROR", turned.reason);
+            s.seasonHistory.insert(turned.value.ended);
+            if (!s.season.updateIfVersion(turned.value.season, input.expectedVersion)) {
               return err("CONFLICT_RELOAD", "Season changed concurrently; reload and retry");
             }
-            // A wording edit and an actual season change are recorded under different commandTypes
-            // (M2 fix): only `season.changeSeason` is a seasonal-Review boundary (`SEASON_COMMANDS`,
-            // review-evidence.ts) — the owner says which this is, since the system cannot reliably
-            // infer "still the same stretch of life, reworded" from "the season actually turned".
             s.recordChange({
-              commandType: input.startsNewSeason ? "season.changeSeason" : "season.updateFocus",
+              commandType: "season.changeSeason",
               entityType: "season",
               entityId: current.id,
-              summary: `v${current.version}→v${updated.value.version}`,
+              summary: `v${current.version}→v${turned.value.season.version}`,
             });
-            return ok(toSeasonDto(updated.value));
+            recordCourseChange(s, "season", current.id, turned.value.season.focus, gate.value);
+            return ok(toSeasonDto(turned.value.season));
           }),
         ),
 
@@ -941,11 +1266,21 @@ export function createApplication(deps: ApplicationDeps) {
         authorize("intention.create", ctx) ??
         guarded("createIntention", () =>
           transact(ctx, (s): Result<IntentionDto> => {
-            if (s.intentions.list().length > 0) return err("VALIDATION_ERROR", "An active Intention already exists");
+            // The Season holds at most three active projects (usually one or two). Never silently exceed it:
+            // the owner must complete, release or pause one first (ACTIVE_PROJECT_LIMIT).
+            const all = s.intentions.list();
+            if (!hasRoomForActive(all)) {
+              return err(
+                "ACTIVE_PROJECT_LIMIT",
+                `At most ${MAX_ACTIVE_INTENTIONS} projects can be active; complete, release or pause one first`,
+              );
+            }
             const created = createIntention({
               id: ids.next(),
               title: input.title,
               desiredResult: input.desiredResult,
+              whyItMatters: input.whyItMatters,
+              position: nextActivePosition(all),
               now: clock.now(),
             });
             if (!created.ok) return err("VALIDATION_ERROR", created.reason);
@@ -1243,6 +1578,210 @@ export function createApplication(deps: ApplicationDeps) {
           }),
         ),
 
+      /**
+       * Owner only (Stage 8): complete, release, pause, resume or bring back a project. Resuming past three
+       * active is a typed ACTIVE_PROJECT_LIMIT result — never a silent bypass (the database trigger is the
+       * backstop). Work running on a project that leaves the active state stops in the same transaction.
+       */
+      changeIntentionStatus: (ctx: CommandContext, input: ChangeIntentionStatusInput): Result<IntentionDto> =>
+        authorize("intention.changeStatus", ctx) ??
+        guarded("changeIntentionStatus", () =>
+          transact(ctx, (s): Result<IntentionDto> => {
+            const current = s.intentions.findById(input.id);
+            if (!current) return err("NOT_FOUND", "Intention not found");
+            if (!isAtVersion(current, input.expectedVersion)) {
+              return err("CONFLICT_RELOAD", `Intention changed (now v${current.version}); reload and retry`);
+            }
+            const now = clock.now();
+            const changed = changeIntentionStatus(s.intentions.list(), input.id, input.to, now);
+            if (!changed.ok) return err(changed.limit ? "ACTIVE_PROJECT_LIMIT" : "VALIDATION_ERROR", changed.reason);
+            if (input.to !== "active") stopWorkInProject(s, input.id, now);
+            if (!s.intentions.updateIfVersion(changed.value, input.expectedVersion)) {
+              return err("CONFLICT_RELOAD", "Intention changed concurrently; reload and retry");
+            }
+            const commandType =
+              input.to === "completed"
+                ? "intention.complete"
+                : input.to === "released"
+                  ? "intention.release"
+                  : input.to === "active"
+                    ? "intention.activate"
+                    : current.status === "active"
+                      ? "intention.defer"
+                      : "intention.reopen";
+            s.recordChange({ commandType, entityType: "intention", entityId: current.id, summary: current.title });
+            return ok(toIntentionDto(changed.value));
+          }),
+        ),
+
+      /** The owner's order of the active projects: the first one is asked first for `Сейчас`. */
+      reorderProjects: (ctx: CommandContext, input: ReorderProjectsInput): Result<IntentionDto[]> =>
+        authorize("intention.reorder", ctx) ??
+        guarded("reorderProjects", () =>
+          transact(ctx, (s): Result<IntentionDto[]> => {
+            const active = activeIntentions(s.intentions.list());
+            const positions = computeReorder(
+              active.map((i) => i.id),
+              input.orderedIds,
+            );
+            if (!positions.ok) return err("VALIDATION_ERROR", positions.reason);
+            s.intentions.reorder(positions.value, clock.now());
+            s.recordChange({
+              commandType: "intention.reorder",
+              entityType: "intention",
+              entityId: "all",
+              summary: "project order changed",
+            });
+            return ok(activeIntentions(s.intentions.list()).map(toIntentionDto));
+          }),
+        ),
+
+      /** Decade plan / 3-year horizon / year: add, reword (MODE A) or change course (MODE B). Owner only. */
+      saveStrategy: (ctx: CommandContext, input: SaveStrategyInput): Result<null> =>
+        authorize("strategy.save", ctx) ??
+        guarded("saveStrategy", () => transact(ctx, (s) => saveStrategyTx(s, input))),
+
+      /** Removing a decade statement is a change of course too: confirmed against the impact it was previewed with. */
+      removeDecadeItem: (ctx: CommandContext, input: RemoveDecadeItemInput): Result<null> =>
+        authorize("strategy.remove", ctx) ??
+        guarded("removeDecadeItem", () =>
+          transact(ctx, (s): Result<null> => {
+            const current = s.decades.findById(input.id);
+            if (!current) return err("NOT_FOUND", "Decade item not found");
+            if (!isAtVersion(current, input.expectedVersion)) {
+              return err("CONFLICT_RELOAD", `Decade item changed (now v${current.version}); reload and retry`);
+            }
+            const gate = gateCourse(s, "decade", current.id, input.impactFingerprint);
+            if (!gate.ok) return gate;
+            if (!s.decades.removeIfVersion(current.id, input.expectedVersion)) {
+              return err("CONFLICT_RELOAD", "Decade item changed concurrently; reload and retry");
+            }
+            s.recordChange({
+              commandType: "strategy.decade.remove",
+              entityType: "decade",
+              entityId: current.id,
+              summary: `${current.startYear}–${current.endYear}: ${current.statement}`,
+            });
+            recordCourseChange(s, "decade", current.id, current.statement, gate.value);
+            return ok(null);
+          }),
+        ),
+
+      /** «Всё пересобрано»: the owner closes the reminder after a change of course. */
+      resolveCourseChange: (ctx: CommandContext, input: ResolveCourseChangeInput): Result<null> =>
+        authorize("strategy.resolveCourseChange", ctx) ??
+        guarded("resolveCourseChange", () =>
+          transact(ctx, (s): Result<null> => {
+            const current = s.courseChanges.findById(input.id);
+            if (!current) return err("NOT_FOUND", "Course change not found");
+            const resolved = resolveCourseChange(current, clock.now());
+            if (!resolved.ok) return err("CONFLICT_RELOAD", `${resolved.reason}; reload`);
+            if (!s.courseChanges.resolveIfOpen(resolved.value)) {
+              return err("CONFLICT_RELOAD", "Course change changed concurrently; reload and retry");
+            }
+            s.recordChange({
+              commandType: "strategy.courseChange.resolve",
+              entityType: "course_change",
+              entityId: current.id,
+              summary: current.summary,
+            });
+            return ok(null);
+          }),
+        ),
+
+      addRoutineItem: (ctx: CommandContext, input: AddRoutineItemInput): Result<RoutineItemDto> =>
+        authorize("routine.add", ctx) ??
+        guarded("addRoutineItem", () =>
+          transact(ctx, (s): Result<RoutineItemDto> => {
+            const created = createRoutineItem({
+              id: ids.next(),
+              kind: input.kind,
+              text: input.text,
+              siblingCount: s.routines.listByKind(input.kind).length,
+              now: clock.now(),
+            });
+            if (!created.ok) return err("VALIDATION_ERROR", created.reason);
+            s.routines.insert(created.value);
+            s.recordChange({
+              commandType: "routine.add",
+              entityType: "routine",
+              entityId: created.value.id,
+              summary: created.value.kind,
+            });
+            return ok(toRoutineItemDto(created.value));
+          }),
+        ),
+
+      editRoutineItem: (ctx: CommandContext, input: EditRoutineItemInput): Result<RoutineItemDto> =>
+        authorize("routine.edit", ctx) ??
+        guarded("editRoutineItem", () =>
+          transact(ctx, (s): Result<RoutineItemDto> => {
+            const current = s.routines.findById(input.id);
+            if (!current) return err("NOT_FOUND", "Routine item not found");
+            if (!isAtVersion(current, input.expectedVersion)) {
+              return err("CONFLICT_RELOAD", `Routine item changed (now v${current.version}); reload and retry`);
+            }
+            const edited = editRoutineItem(current, { text: input.text, active: input.active }, clock.now());
+            if (!edited.ok) return err("VALIDATION_ERROR", edited.reason);
+            if (!s.routines.updateIfVersion(edited.value, input.expectedVersion)) {
+              return err("CONFLICT_RELOAD", "Routine item changed concurrently; reload and retry");
+            }
+            s.recordChange({
+              commandType: "routine.edit",
+              entityType: "routine",
+              entityId: current.id,
+              summary: `v${current.version}→v${edited.value.version}`,
+            });
+            return ok(toRoutineItemDto(edited.value));
+          }),
+        ),
+
+      removeRoutineItem: (ctx: CommandContext, input: RemoveRoutineItemInput): Result<null> =>
+        authorize("routine.remove", ctx) ??
+        guarded("removeRoutineItem", () =>
+          transact(ctx, (s): Result<null> => {
+            const current = s.routines.findById(input.id);
+            if (!current) return err("NOT_FOUND", "Routine item not found");
+            if (!isAtVersion(current, input.expectedVersion)) {
+              return err("CONFLICT_RELOAD", `Routine item changed (now v${current.version}); reload and retry`);
+            }
+            if (!s.routines.removeIfVersion(input.id, input.expectedVersion)) {
+              return err("CONFLICT_RELOAD", "Routine item changed concurrently; reload and retry");
+            }
+            s.recordChange({
+              commandType: "routine.remove",
+              entityType: "routine",
+              entityId: input.id,
+              summary: current.kind,
+            });
+            // Close the gap, so the next item added never shares a position with a survivor.
+            const rest = s.routines.listByKind(current.kind).map((i) => i.id);
+            const positions = computeReorder(rest, rest);
+            if (positions.ok) s.routines.reorder(positions.value, clock.now());
+            return ok(null);
+          }),
+        ),
+
+      reorderRoutineItems: (ctx: CommandContext, input: ReorderRoutineItemsInput): Result<RoutineItemDto[]> =>
+        authorize("routine.reorder", ctx) ??
+        guarded("reorderRoutineItems", () =>
+          transact(ctx, (s): Result<RoutineItemDto[]> => {
+            const positions = computeReorder(
+              s.routines.listByKind(input.kind).map((i) => i.id),
+              input.orderedIds,
+            );
+            if (!positions.ok) return err("VALIDATION_ERROR", positions.reason);
+            s.routines.reorder(positions.value, clock.now());
+            s.recordChange({
+              commandType: "routine.reorder",
+              entityType: "routine",
+              entityId: input.kind,
+              summary: "order changed",
+            });
+            return ok(s.routines.listByKind(input.kind).map(toRoutineItemDto));
+          }),
+        ),
+
       /** PROPOSAL (mcp-ai): a first route or a replan. Validated by a full dry run; never applied here. */
       createRouteProposal: (ctx: CommandContext, input: CreateRouteProposalInput): Result<ProposalDto> =>
         authorize("proposal.create", ctx) ??
@@ -1250,7 +1789,9 @@ export function createApplication(deps: ApplicationDeps) {
           transact(ctx, (s): Result<ProposalDto> => {
             const conflict = checkRevision(s, input.expectedRevision);
             if (conflict) return conflict;
-            if (!s.intentions.findById(input.intentionId)) return err("NOT_FOUND", "Intention not found");
+            const target = s.intentions.findById(input.intentionId);
+            if (!target) return err("NOT_FOUND", "Intention not found");
+            if (target.status !== "active") return notActive();
 
             const change = resolveRouteRefs(input, () => ids.next());
             if (!change.ok) return change;
@@ -1301,6 +1842,7 @@ export function createApplication(deps: ApplicationDeps) {
             if (conflict) return conflict;
             const intention = s.intentions.findById(input.intentionId);
             if (!intention) return err("NOT_FOUND", "Intention not found");
+            if (intention.status !== "active") return notActive();
             const edited = editIntention(
               intention,
               { title: intention.title, desiredResult: input.desiredResult },
@@ -1411,7 +1953,9 @@ export function createApplication(deps: ApplicationDeps) {
             // The order must be reasoned against the world the AI actually read (not just the plan row).
             const conflict = checkRevision(s, input.expectedRevision);
             if (conflict) return conflict;
-            if (!s.intentions.findById(input.intentionId)) return err("NOT_FOUND", "Intention not found");
+            const owner = s.intentions.findById(input.intentionId);
+            if (!owner) return err("NOT_FOUND", "Intention not found");
+            if (owner.status !== "active") return notActive();
             const plan = s.plans.findByIntention(input.intentionId);
             if (!plan) {
               return err(

@@ -87,6 +87,13 @@ const REDUNDANT_OR_TECHNICAL_COMMANDS = new Set([
   "pattern.reject",
   "planningRule.activate",
   "planningRule.deactivate",
+  // Stage 8: daily routines are the owner's infrastructure, not a lived fact to learn from; the reminder
+  // closing after a change of course is bookkeeping (the change itself is evidence).
+  "routine.add",
+  "routine.edit",
+  "routine.remove",
+  "routine.reorder",
+  "strategy.courseChange.resolve",
 ]);
 
 const actorLabel: Record<string, string> = { "user-ui": "Пользователь", "mcp-ai": "ИИ", system: "Система" };

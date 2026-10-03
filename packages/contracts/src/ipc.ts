@@ -4,21 +4,25 @@ import type {
   ActionDto,
   AddActionInput,
   AddGoodLifeConditionInput,
+  AddRoutineItemInput,
   AddStageInput,
   BlockActionInput,
   CalendarSnapshotDto,
   CaptureDto,
+  ChangeIntentionStatusInput,
   ChangeLogEntryDto,
   CompleteActionInput,
   ConfirmPatternInput,
   ConnectCalendarInput,
   CorrectReviewFindingInput,
+  CourseImpactDto,
   CreateIntentionInput,
   CreateSeasonInput,
   CurrentViewDto,
   DeactivatePlanningRuleInput,
   EditActionInput,
   EditGoodLifeConditionInput,
+  EditRoutineItemInput,
   EditStageInput,
   ExecutionDto,
   ForgetMemoryInput,
@@ -33,14 +37,20 @@ import type {
   MemoryDto,
   PatternDto,
   PlanningRuleDto,
+  PreviewCourseImpactInput,
   ProposalDto,
   RejectPatternInput,
   RejectReviewFindingInput,
+  RemoveDecadeItemInput,
   RemoveGoodLifeConditionInput,
+  RemoveRoutineItemInput,
   ReopenActionInput,
   ReorderActionsInput,
   ReorderGoodLifeConditionsInput,
+  ReorderProjectsInput,
+  ReorderRoutineItemsInput,
   ReorderStagesInput,
+  ResolveCourseChangeInput,
   ResolveProposalInput,
   Result,
   RetryCaptureInput,
@@ -48,12 +58,15 @@ import type {
   ReviewDto,
   ReviewFindingDto,
   ReviewWithFindingsDto,
+  RoutineItemDto,
+  SaveStrategyInput,
   SearchMemoryInput,
   SeasonDto,
   SetCurrentStageInput,
   SetDailyWorkTargetInput,
   StageDto,
   StateRevisionDto,
+  StrategyHistoryDto,
   SubmitCaptureInput,
   UnblockActionInput,
   UpdateIntentionInput,
@@ -109,6 +122,17 @@ export const IPC_CHANNELS = {
   rejectPattern: "lm:command:rejectPattern",
   listPlanningRules: "lm:query:listPlanningRules",
   deactivatePlanningRule: "lm:command:deactivatePlanningRule",
+  getStrategyHistory: "lm:query:getStrategyHistory",
+  previewCourseImpact: "lm:query:previewCourseImpact",
+  saveStrategy: "lm:command:saveStrategy",
+  removeDecadeItem: "lm:command:removeDecadeItem",
+  resolveCourseChange: "lm:command:resolveCourseChange",
+  changeIntentionStatus: "lm:command:changeIntentionStatus",
+  reorderProjects: "lm:command:reorderProjects",
+  addRoutineItem: "lm:command:addRoutineItem",
+  editRoutineItem: "lm:command:editRoutineItem",
+  removeRoutineItem: "lm:command:removeRoutineItem",
+  reorderRoutineItems: "lm:command:reorderRoutineItems",
   stateChanged: "lm:event:stateChanged",
 } as const;
 
@@ -124,6 +148,10 @@ export type LivingMapApi = {
     getReview(input: GetReviewInput): Promise<Result<ReviewWithFindingsDto>>;
     listPatternCandidates(input: ListPatternCandidatesInput): Promise<Result<PatternDto[]>>;
     listPlanningRules(input: ListPlanningRulesInput): Promise<Result<PlanningRuleDto[]>>;
+    /** Past seasons and the projects closed in the current one (the Full Map's history). */
+    getStrategyHistory(): Promise<Result<StrategyHistoryDto>>;
+    /** What a change of course at this level may affect — to be shown BEFORE the change is confirmed. */
+    previewCourseImpact(input: PreviewCourseImpactInput): Promise<Result<CourseImpactDto>>;
   };
   commands: {
     createSeason(input: CreateSeasonInput): Promise<Result<SeasonDto>>;
@@ -173,6 +201,18 @@ export type LivingMapApi = {
     /** «Не считать правилом». */
     rejectPattern(input: RejectPatternInput): Promise<Result<PatternDto>>;
     deactivatePlanningRule(input: DeactivatePlanningRuleInput): Promise<Result<PlanningRuleDto>>;
+    /** Decade / 3-year / year layer: add, reword (MODE A) or change course (MODE B, with the shown impact). */
+    saveStrategy(input: SaveStrategyInput): Promise<Result<null>>;
+    removeDecadeItem(input: RemoveDecadeItemInput): Promise<Result<null>>;
+    /** «Всё пересобрано»: closes the open reminder after a change of course. */
+    resolveCourseChange(input: ResolveCourseChangeInput): Promise<Result<null>>;
+    /** Complete / release / pause / resume / bring back a project. Resuming is limited to three active. */
+    changeIntentionStatus(input: ChangeIntentionStatusInput): Promise<Result<IntentionDto>>;
+    reorderProjects(input: ReorderProjectsInput): Promise<Result<IntentionDto[]>>;
+    addRoutineItem(input: AddRoutineItemInput): Promise<Result<RoutineItemDto>>;
+    editRoutineItem(input: EditRoutineItemInput): Promise<Result<RoutineItemDto>>;
+    removeRoutineItem(input: RemoveRoutineItemInput): Promise<Result<null>>;
+    reorderRoutineItems(input: ReorderRoutineItemsInput): Promise<Result<RoutineItemDto[]>>;
   };
   events: {
     /** Returns an unsubscribe function. */

@@ -185,6 +185,8 @@ describe("two connections share one database", () => {
         s.season.insert({
           id: uuidGenerator.next(),
           focus: "half",
+          whyItMatters: "",
+          startedAt: systemClock.now(),
           version: 1,
           createdAt: systemClock.now(),
           updatedAt: systemClock.now(),
@@ -206,6 +208,8 @@ describe("two connections share one database", () => {
         s.season.insert({
           id: uuidGenerator.next(),
           focus: "forgot recordChange",
+          whyItMatters: "",
+          startedAt: systemClock.now(),
           version: 1,
           createdAt: systemClock.now(),
           updatedAt: systemClock.now(),

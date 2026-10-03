@@ -120,6 +120,13 @@
       "when": 1790749469112,
       "tag": "0016_memory_source_capture_verified",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1790959987120,
+      "tag": "0017_stage8_full_map",
+      "breakpoints": true
     }
   ]
 }
