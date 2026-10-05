@@ -9,7 +9,7 @@ import type {
   WhyNowReasonDto,
 } from "@living-map/contracts";
 import { useEffect, useState } from "react";
-import { formatProgress, formatYears } from "./format";
+import { formatPeriod, formatProgress } from "./format";
 import { PlanSection } from "./proposals";
 
 const WHY_NOW_LOCAL: Record<WhyNowReasonDto["kind"], string> = {
@@ -440,7 +440,7 @@ function StrategyBreadcrumb({ view, onOpenMap }: { view: CurrentViewDto; onOpenM
             <ul data-testid="now-path" className="mt-1 space-y-0.5">
               {strategy.year && (
                 <li data-testid="now-path-year">
-                  <span className="text-neutral-500">Этот год: </span>
+                  <span className="text-neutral-500">{strategy.year.label ?? "Этот год"}: </span>
                   {strategy.year.direction}
                 </li>
               )}
@@ -452,7 +452,9 @@ function StrategyBreadcrumb({ view, onOpenMap }: { view: CurrentViewDto; onOpenM
               )}
               {served.map((d) => (
                 <li key={d.id} data-testid="now-path-decade">
-                  <span className="text-neutral-500">Куда я иду, {formatYears(d.startYear, d.endYear)}: </span>
+                  <span className="text-neutral-500">
+                    Куда я иду, {formatPeriod(d.label, d.startYear, d.endYear)}:{" "}
+                  </span>
                   {d.statement}
                 </li>
               ))}

@@ -5,6 +5,10 @@ const Version = z.int().positive();
 const Year = z.int().min(1900).max(2200);
 const Statement = z.string().trim().min(1).max(120);
 const Direction = z.string().trim().min(1).max(200);
+/** The 3-year direction may hold a few owner sentences (direction, inner capability, outer result). */
+const HorizonDirection = z.string().trim().min(1).max(500);
+/** Owner-facing name of a period that is not a plain calendar range («25–34», «65+», «До следующего дня рождения»). Empty = none. */
+const Label = z.string().trim().max(60);
 /** One short sentence linking a layer to the one above. Empty is allowed (optional link). */
 const Why = z.string().trim().max(200);
 const Timestamp = z.iso.datetime();
@@ -25,6 +29,8 @@ export const DecadePlanItemDtoSchema = z.object({
   startYear: Year,
   endYear: Year,
   statement: z.string(),
+  /** How the owner names this range (e.g. by age). Null = show the years. */
+  label: z.string().nullable(),
   version: Version,
   createdAt: Timestamp,
   updatedAt: Timestamp,
@@ -49,13 +55,19 @@ export type HorizonDto = z.infer<typeof HorizonDtoSchema>;
 
 export const YearDirectionDtoSchema = z.object({
   id: Id,
+  /** The calendar year this direction was set in (anchor for ordering and evidence). */
   year: Year,
+  /** The owner's name for an annual horizon that is not the calendar year («До следующего дня рождения»). Null = `year`. */
+  label: z.string().nullable(),
   direction: z.string(),
   whyItMatters: z.string(),
   version: Version,
   createdAt: Timestamp,
   updatedAt: Timestamp,
-  /** False once the calendar year has moved on: the owner should set this year's direction. */
+  /**
+   * False once the calendar year has moved on: the owner should set this year's direction. Always true for
+   * a labelled (non-calendar) annual horizon — its end is the owner's, never guessed from the calendar.
+   */
   isCurrentYear: z.boolean(),
   evidence: z.array(EvidenceItemDtoSchema),
 });
@@ -125,6 +137,8 @@ export const SaveStrategyInputSchema = z.discriminatedUnion("level", [
     startYear: Year,
     endYear: Year,
     statement: Statement,
+    /** Omitted = keep the current label (none when adding). Changing it changes the course. */
+    label: Label.optional(),
     ...Edit,
   }),
   z.strictObject({
@@ -132,7 +146,7 @@ export const SaveStrategyInputSchema = z.discriminatedUnion("level", [
     /** Absent = set the very first 3-year horizon. */
     expectedVersion: Version.optional(),
     startYear: Year,
-    direction: Direction,
+    direction: HorizonDirection,
     whyItMatters: Why,
     ...Edit,
   }),
@@ -140,6 +154,8 @@ export const SaveStrategyInputSchema = z.discriminatedUnion("level", [
     level: z.literal("year"),
     expectedVersion: Version.optional(),
     year: Year,
+    /** Omitted = keep the current label (none when setting). Changing it changes the course. */
+    label: Label.optional(),
     direction: Direction,
     whyItMatters: Why,
     ...Edit,

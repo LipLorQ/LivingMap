@@ -201,6 +201,7 @@ function decadePlanRepository(q: Tx): DecadePlanRepository {
           startYear: item.startYear,
           endYear: item.endYear,
           statement: item.statement,
+          label: item.label,
           version: item.version,
           updatedAt: item.updatedAt,
         })
@@ -251,6 +252,7 @@ function yearDirectionRepository(q: Tx): YearDirectionRepository {
         .update(yearDirection)
         .set({
           year: y.year,
+          label: y.label,
           direction: y.direction,
           whyItMatters: y.whyItMatters,
           version: y.version,

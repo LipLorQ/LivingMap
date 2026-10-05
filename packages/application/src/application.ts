@@ -778,8 +778,11 @@ export function createApplication(deps: ApplicationDeps) {
     const needMode = err<null>("VALIDATION_ERROR", "Say whether this is a wording edit or a change of course");
     const yearsMeanCourse = err<null>(
       "VALIDATION_ERROR",
-      "Changing the years changes the course, not just the wording",
+      "Changing the years or the period's name changes the course, not just the wording",
     );
+    /** Omitted = unchanged; otherwise compared the way it would be stored (empty = no label). */
+    const labelChanges = (proposed: string | undefined, current: string | null) =>
+      proposed !== undefined && (proposed.trim() || null) !== current;
 
     if (input.level === "decade") {
       const all = s.decades.list();
@@ -789,6 +792,7 @@ export function createApplication(deps: ApplicationDeps) {
           startYear: input.startYear,
           endYear: input.endYear,
           statement: input.statement,
+          label: input.label,
           others: all,
           now,
         });
@@ -798,7 +802,7 @@ export function createApplication(deps: ApplicationDeps) {
           commandType: "strategy.decade.add",
           entityType: "decade",
           entityId: created.value.id,
-          summary: `${created.value.startYear}–${created.value.endYear}: ${created.value.statement}`,
+          summary: `${created.value.label ?? `${created.value.startYear}–${created.value.endYear}`}: ${created.value.statement}`,
         });
         return ok(null);
       }
@@ -809,7 +813,13 @@ export function createApplication(deps: ApplicationDeps) {
       }
       if (input.mode === undefined) return needMode;
       if (input.mode === "wording") {
-        if (input.startYear !== current.startYear || input.endYear !== current.endYear) return yearsMeanCourse;
+        if (
+          input.startYear !== current.startYear ||
+          input.endYear !== current.endYear ||
+          labelChanges(input.label, current.label)
+        ) {
+          return yearsMeanCourse;
+        }
         const next = rewordDecadeItem(current, input.statement, now);
         if (!next.ok) return err("VALIDATION_ERROR", next.reason);
         if (!s.decades.updateIfVersion(next.value, input.expectedVersion)) return conflict();
@@ -828,7 +838,7 @@ export function createApplication(deps: ApplicationDeps) {
       if (!gate.ok) return gate;
       const next = reviseDecadeItem(
         current,
-        { startYear: input.startYear, endYear: input.endYear, statement: input.statement },
+        { startYear: input.startYear, endYear: input.endYear, statement: input.statement, label: input.label },
         all.filter((d) => d.id !== current.id),
         now,
       );
@@ -838,7 +848,7 @@ export function createApplication(deps: ApplicationDeps) {
         commandType: "strategy.decade.course",
         entityType: "decade",
         entityId: current.id,
-        summary: `${next.value.startYear}–${next.value.endYear}: ${next.value.statement}`,
+        summary: `${next.value.label ?? `${next.value.startYear}–${next.value.endYear}`}: ${next.value.statement}`,
       });
       recordCourseChange(s, "decade", current.id, next.value.statement, gate.value);
       return ok(null);
@@ -907,6 +917,7 @@ export function createApplication(deps: ApplicationDeps) {
       const created = createYearDirection({
         id: ids.next(),
         year: input.year,
+        label: input.label,
         direction: input.direction,
         whyItMatters: input.whyItMatters,
         now,
@@ -926,7 +937,7 @@ export function createApplication(deps: ApplicationDeps) {
     }
     if (input.mode === undefined) return needMode;
     if (input.mode === "wording") {
-      if (input.year !== current.year) return yearsMeanCourse;
+      if (input.year !== current.year || labelChanges(input.label, current.label)) return yearsMeanCourse;
       const next = rewordYearDirection(current, { direction: input.direction, whyItMatters: input.whyItMatters }, now);
       if (!next.ok) return err("VALIDATION_ERROR", next.reason);
       if (!s.year.updateIfVersion(next.value, input.expectedVersion)) return conflict();
@@ -942,7 +953,7 @@ export function createApplication(deps: ApplicationDeps) {
     if (!gate.ok) return gate;
     const next = reviseYearDirection(
       current,
-      { year: input.year, direction: input.direction, whyItMatters: input.whyItMatters },
+      { year: input.year, label: input.label, direction: input.direction, whyItMatters: input.whyItMatters },
       now,
     );
     if (!next.ok) return err("VALIDATION_ERROR", next.reason);

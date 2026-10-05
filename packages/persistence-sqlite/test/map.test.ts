@@ -84,7 +84,7 @@ describe("migration 0017 from the real schema v17", () => {
     legacyV17(false);
     const h = track(openDesktopDatabase(file));
     expect(h.sqlite.pragma("user_version", { simple: true })).toBe(EXPECTED_SCHEMA_VERSION);
-    expect(EXPECTED_SCHEMA_VERSION).toBe(18);
+    expect(EXPECTED_SCHEMA_VERSION).toBe(19); // 0017 (Stage 8), then 0018 (Stage 9 period labels)
     expect(readdirSync(backupsDir(home)).some((f) => f.includes("schema-v17"))).toBe(true);
     expect(h.sqlite.pragma("integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(h.sqlite.pragma("foreign_key_check")).toEqual([]);
@@ -463,5 +463,59 @@ describe("history is readable and complete", () => {
     unwrap(app.commands.changeIntentionStatus(ctx(app), { id: p.id, expectedVersion: p.version, to: "deferred" }));
     const types = unwrap(app.queries.listChangeHistory({ limit: 50 })).map((e) => e.commandType);
     expect(types).toEqual(["intention.defer", "routine.add", "intention.create", "strategy.decade.add"]);
+  });
+});
+
+describe("migration 0018 from the real schema v18 (Stage 9 period labels)", () => {
+  it("backs up first, adds empty labels only, keeps every strategy row, and a label then survives a restart", () => {
+    const legacy = new Database(file);
+    legacy.pragma("journal_mode = WAL");
+    applyMigrations(legacy, MIGRATIONS.slice(0, 18));
+    const T = "2026-10-03T06:16:16.227Z";
+    legacy.exec(`
+      INSERT INTO decade_plan_items (id, start_year, end_year, statement, version, created_at, updated_at) VALUES ('d1',2026,2035,'Строить',1,'${T}','${T}');
+      INSERT INTO three_year_horizon (id, start_year, end_year, direction, why_it_matters, version, created_at, updated_at) VALUES ('h1',2026,2028,'Расти','',1,'${T}','${T}');
+      INSERT INTO year_direction (id, year, direction, why_it_matters, version, created_at, updated_at) VALUES ('y1',2026,'MVP','',2,'${T}','${T}');
+      UPDATE meta SET state_revision = 187;
+    `);
+    const strategyRows = (db: Database.Database) =>
+      ["decade_plan_items", "three_year_horizon", "year_direction"].map((t) =>
+        db.prepare(`select id, version, created_at, updated_at from ${t} order by id`).all(),
+      );
+    const before = strategyRows(legacy);
+    legacy.close();
+
+    const h = track(openDesktopDatabase(file));
+    expect(h.sqlite.pragma("user_version", { simple: true })).toBe(19);
+    expect(readdirSync(backupsDir(home)).some((f) => f.includes("schema-v18"))).toBe(true);
+    expect(h.sqlite.pragma("integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(h.sqlite.pragma("foreign_key_check")).toEqual([]);
+    expect(strategyRows(h.sqlite)).toEqual(before);
+    expect(h.sqlite.prepare("select label from decade_plan_items").all()).toEqual([{ label: null }]);
+    expect(h.sqlite.prepare("select label from year_direction").all()).toEqual([{ label: null }]);
+
+    const app = appOn(h);
+    const v = unwrap(app.queries.getCurrentView());
+    expect(v.strategy.year).toMatchObject({ year: 2026, label: null, direction: "MVP", isCurrentYear: true });
+    expect(v.strategy.decadePlan[0]).toMatchObject({ label: null, statement: "Строить" });
+    expect(unwrap(app.queries.getStateRevision()).stateRevision).toBe(187);
+
+    unwrap(
+      app.commands.saveStrategy(ctx(app), {
+        level: "year",
+        expectedVersion: 2,
+        year: 2026,
+        label: "До следующего дня рождения",
+        direction: "MVP",
+        whyItMatters: "",
+        mode: "course",
+      }),
+    );
+    h.close();
+    const reopened = track(openDesktopDatabase(file));
+    expect(unwrap(appOn(reopened).queries.getCurrentView()).strategy.year).toMatchObject({
+      label: "До следующего дня рождения",
+      version: 3,
+    });
   });
 });

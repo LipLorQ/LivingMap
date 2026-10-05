@@ -29,6 +29,7 @@ import {
   type Instant,
   type Intention,
   impactFingerprint,
+  MAX_STRATEGY_YEAR,
   type OrderedActionPlan,
   type ProjectSnapshot,
   projectProgress,
@@ -224,8 +225,16 @@ export function toStrategyDto(
     year: state.year
       ? {
           ...state.year,
-          isCurrentYear: state.year.year === state.currentYear,
-          evidence: evidenceForYears({ startYear: state.year.year, endYear: state.year.year }, timeZone, facts),
+          // A labelled annual horizon («До следующего дня рождения») is not the calendar year: its end is the
+          // owner's to name, so the calendar never declares it outdated.
+          isCurrentYear: state.year.label !== null || state.year.year === state.currentYear,
+          // Same for its evidence: not cut at 31 December, but everything recorded since the owner set it.
+          evidence:
+            state.year.label === null
+              ? evidenceForYears({ startYear: state.year.year, endYear: state.year.year }, timeZone, facts)
+              : evidenceForYears({ startYear: state.year.year, endYear: MAX_STRATEGY_YEAR }, timeZone, facts).filter(
+                  (e) => e.at >= (state.year as NonNullable<typeof state.year>).createdAt,
+                ),
         }
       : null,
     seasonProgress: progress,

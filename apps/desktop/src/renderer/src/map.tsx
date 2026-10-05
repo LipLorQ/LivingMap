@@ -15,7 +15,7 @@ import type {
   UpdateSeasonFocusInput,
 } from "@living-map/contracts";
 import { type ReactNode, useEffect, useState } from "react";
-import { describeImpact, formatDateRu, formatProgress, formatYears, PROJECT_LIMIT_TEXT } from "./format";
+import { describeImpact, formatDateRu, formatPeriod, formatProgress, formatYears, PROJECT_LIMIT_TEXT } from "./format";
 import { type ExecutionHandlers, ExecutionPanel } from "./now-screen";
 import { EditableText, ReorderButtons } from "./shared-ui";
 
@@ -201,15 +201,19 @@ function DecadeRow({ item, run, currentYear }: { item: DecadePlanItemDto; run: R
   const [statement, setStatement] = useDraft(item.statement);
   const [start, setStart] = useDraft(String(item.startYear));
   const [end, setEnd] = useDraft(String(item.endYear));
+  const [label, setLabel] = useDraft(item.label ?? "");
   const [removal, setRemoval] = useState<CourseImpactDto | null>(null);
   const years = { startYear: Number(start), endYear: Number(end) };
-  const yearsChanged = years.startYear !== item.startYear || years.endYear !== item.endYear;
+  // A new name for the range («25–34») is a new period, like new years: never a mere wording edit.
+  const yearsChanged =
+    years.startYear !== item.startYear || years.endYear !== item.endYear || (label.trim() || null) !== item.label;
   const save = (mode: "wording" | "course", impactFingerprint?: string): SaveStrategyInput => ({
     level: "decade",
     id: item.id,
     expectedVersion: item.version,
     ...years,
     statement,
+    label,
     mode,
     ...(impactFingerprint === undefined ? {} : { impactFingerprint }),
   });
@@ -221,7 +225,11 @@ function DecadeRow({ item, run, currentYear }: { item: DecadePlanItemDto; run: R
   return (
     <li data-testid="decade" data-id={item.id} className="space-y-1 rounded border border-neutral-200 p-2">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="font-mono text-xs text-neutral-500">{formatYears(item.startYear, item.endYear)}</span>
+        <span data-testid="decade-period" className="font-mono text-xs text-neutral-500">
+          {item.label
+            ? `${item.label} · ${formatYears(item.startYear, item.endYear)}`
+            : formatYears(item.startYear, item.endYear)}
+        </span>
         <span data-testid="decade-statement" className="flex-1">
           {item.statement}
         </span>
@@ -261,6 +269,15 @@ function DecadeRow({ item, run, currentYear }: { item: DecadePlanItemDto; run: R
               inputMode="numeric"
               value={end}
               onChange={(e) => setEnd(e.target.value)}
+            />
+            <input
+              data-testid="decade-label"
+              aria-label="Как ты называешь эти годы"
+              className="w-28 rounded border px-1"
+              maxLength={60}
+              placeholder="например, 25–34"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
             />
             <input
               data-testid="decade-statement-input"
@@ -303,6 +320,7 @@ function DecadesLevel({ view, run }: { view: CurrentViewDto; run: Run }) {
   const { decadePlan, currentYear } = view.strategy;
   const [start, setStart] = useState(String(currentYear));
   const [end, setEnd] = useState(String(currentYear + 9));
+  const [newLabel, setNewLabel] = useState("");
   const [statement, setStatement] = useState("");
   return (
     <section
@@ -339,6 +357,15 @@ function DecadesLevel({ view, run }: { view: CurrentViewDto; run: Run }) {
           onChange={(e) => setEnd(e.target.value)}
         />
         <input
+          data-testid="decade-new-label"
+          aria-label="Как ты называешь эти годы"
+          className="w-28 rounded border px-1"
+          maxLength={60}
+          placeholder="например, 25–34"
+          value={newLabel}
+          onChange={(e) => setNewLabel(e.target.value)}
+        />
+        <input
           data-testid="decade-new-statement"
           className="flex-1 rounded border px-2 py-1"
           maxLength={120}
@@ -357,9 +384,13 @@ function DecadesLevel({ view, run }: { view: CurrentViewDto; run: Run }) {
                 startYear: Number(start),
                 endYear: Number(end),
                 statement,
+                label: newLabel,
               }),
             );
-            if (r.ok) setStatement("");
+            if (r.ok) {
+              setStatement("");
+              setNewLabel("");
+            }
           }}
         >
           Добавить
@@ -413,10 +444,11 @@ function HorizonLevel({ view, run }: { view: CurrentViewDto; run: Run }) {
             onChange={(e) => setStartYear(e.target.value)}
           />
         )}
-        <input
+        <textarea
           data-testid="horizon-direction"
           className="flex-1 rounded border px-2 py-1"
-          maxLength={200}
+          maxLength={500}
+          rows={3}
           placeholder="Куда ты придёшь за эти 3 года?"
           value={direction}
           onChange={(e) => setDirection(e.target.value)}
@@ -459,13 +491,16 @@ function HorizonLevel({ view, run }: { view: CurrentViewDto; run: Run }) {
 function YearLevel({ view, run }: { view: CurrentViewDto; run: Run }) {
   const { year, currentYear } = view.strategy;
   const [yearValue, setYearValue] = useDraft(String(year?.year ?? currentYear));
+  const [label, setLabel] = useDraft(year?.label ?? "");
   const [direction, setDirection] = useDraft(year?.direction ?? "");
   const [why, setWhy] = useDraft(year?.whyItMatters ?? "");
-  const yearChanged = year !== null && Number(yearValue) !== year.year;
+  // A new name for the period («До следующего дня рождения») is a new period, like a new year.
+  const yearChanged = year !== null && (Number(yearValue) !== year.year || (label.trim() || null) !== year.label);
   const build = (mode?: "wording" | "course", impactFingerprint?: string): SaveStrategyInput => ({
     level: "year",
     ...(year ? { expectedVersion: year.version } : {}),
     year: Number(yearValue),
+    label,
     direction,
     whyItMatters: why,
     ...(mode ? { mode } : {}),
@@ -476,7 +511,9 @@ function YearLevel({ view, run }: { view: CurrentViewDto; run: Run }) {
     <section data-testid="map-year" className="space-y-2 rounded border border-neutral-400 p-3">
       <h2 className="font-semibold">
         {LEVEL_TITLES.year}
-        <span className="ml-2 font-normal text-neutral-500">{year?.year ?? currentYear}</span>
+        <span data-testid="year-period" className="ml-2 font-normal text-neutral-500">
+          {year?.label ?? year?.year ?? currentYear}
+        </span>
       </h2>
       {year && !year.isCurrentYear && (
         <p data-testid="year-outdated" className="text-amber-800">
@@ -494,6 +531,15 @@ function YearLevel({ view, run }: { view: CurrentViewDto; run: Run }) {
             onChange={(e) => setYearValue(e.target.value)}
           />
         )}
+        <input
+          data-testid="year-label"
+          aria-label="Как ты называешь этот год"
+          className="w-56 rounded border px-1"
+          maxLength={60}
+          placeholder="если не календарный: «До дня рождения»"
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+        />
         <input
           data-testid="year-direction"
           className="flex-1 rounded border px-2 py-1"
@@ -884,7 +930,7 @@ function NowLevel({
             </PathLine>
             <PathLine testId="path-decade" label="Куда я иду">
               {served.length > 0
-                ? served.map((d) => `${formatYears(d.startYear, d.endYear)}: ${d.statement}`).join("; ")
+                ? served.map((d) => `${formatPeriod(d.label, d.startYear, d.endYear)}: ${d.statement}`).join("; ")
                 : NOT_SET}
             </PathLine>
           </ol>

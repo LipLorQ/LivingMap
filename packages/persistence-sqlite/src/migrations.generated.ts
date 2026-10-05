@@ -159,5 +159,12 @@ export const MIGRATIONS: ReadonlyArray<{ tag: string; statements: readonly strin
       "-- The active-project limit is a database fact like captures.raw_text (migration 0011): no writer — Electron,\n-- MCP or a future one — can ever put a fourth Intention into the active state. MUST match MAX_ACTIVE_INTENTIONS.\nCREATE TRIGGER `intentions_active_limit_insert` BEFORE INSERT ON `intentions`\nWHEN NEW.`status` = 'active' AND (SELECT COUNT(*) FROM `intentions` WHERE `status` = 'active') >= 3\nBEGIN\n  SELECT RAISE(ABORT, 'at most 3 active intentions');\nEND;",
       "CREATE TRIGGER `intentions_active_limit_update` BEFORE UPDATE OF `status` ON `intentions`\nWHEN NEW.`status` = 'active' AND OLD.`status` <> 'active' AND (SELECT COUNT(*) FROM `intentions` WHERE `status` = 'active') >= 3\nBEGIN\n  SELECT RAISE(ABORT, 'at most 3 active intentions');\nEND;"
     ]
+  },
+  {
+    "tag": "0018_stage9_strategy_labels",
+    "statements": [
+      "ALTER TABLE `decade_plan_items` ADD `label` text;",
+      "ALTER TABLE `year_direction` ADD `label` text;"
+    ]
   }
 ];

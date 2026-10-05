@@ -6,12 +6,15 @@ import {
   DECADE_PLAN_MAX_ITEMS,
   DECADE_STATEMENT_MAX,
   decadesServedBy,
+  HORIZON_DIRECTION_MAX,
+  normalizeStrategyLabel,
   reviseDecadeItem,
   reviseHorizon,
   reviseYearDirection,
   rewordDecadeItem,
   rewordHorizon,
   rewordYearDirection,
+  STRATEGY_LABEL_MAX,
   STRATEGY_TEXT_MAX,
   sortDecadePlan,
   yearRangesOverlap,
@@ -44,6 +47,7 @@ describe("decade plan", () => {
         startYear: 2026,
         endYear: 2035,
         statement: "Стать мастером",
+        label: null,
         version: 1,
         createdAt: T0,
         updatedAt: T0,
@@ -123,7 +127,7 @@ describe("3-year horizon", () => {
       createHorizon({
         id: "h",
         startYear: 2026,
-        direction: "x".repeat(STRATEGY_TEXT_MAX + 1),
+        direction: "x".repeat(HORIZON_DIRECTION_MAX + 1),
         whyItMatters: "",
         now: T0,
       }).ok,
@@ -137,6 +141,19 @@ describe("3-year horizon", () => {
         now: T0,
       }).ok,
     ).toBe(false);
+  });
+
+  it("holds a few owner sentences (direction, inner capability, outer result), still bounded", () => {
+    const three = ["Стать машиной.", "Внутренняя способность: умею заканчивать.", "Внешний результат: медиа."].join(
+      "\n",
+    );
+    const long = "x".repeat(STRATEGY_TEXT_MAX + 1);
+    expect(createHorizon({ id: "h", startYear: 2026, direction: three, whyItMatters: "", now: T0 })).toMatchObject({
+      ok: true,
+      value: { direction: three },
+    });
+    expect(createHorizon({ id: "h", startYear: 2026, direction: long, whyItMatters: "", now: T0 }).ok).toBe(true);
+    expect(HORIZON_DIRECTION_MAX).toBeGreaterThan(STRATEGY_TEXT_MAX);
   });
 
   it("reword keeps the years; revise moves them (still three years)", () => {
@@ -178,8 +195,78 @@ describe("year direction", () => {
     });
   });
 
+  it("may carry the owner's own name for a non-calendar annual horizon; no end date is invented", () => {
+    const y = createYearDirection({
+      id: "y",
+      year: 2026,
+      label: "  До следующего дня рождения ",
+      direction: "Машина",
+      whyItMatters: "",
+      now: T0,
+    });
+    expect(y).toMatchObject({ ok: true, value: { year: 2026, label: "До следующего дня рождения" } });
+    if (!y.ok) throw new Error("unreachable");
+    // a wording edit never touches the period
+    expect(rewordYearDirection(y.value, { direction: "Машина 2", whyItMatters: "" }, T1)).toMatchObject({
+      ok: true,
+      value: { label: "До следующего дня рождения" },
+    });
+    // a change of course keeps the label unless a new one is given; "" clears it back to the calendar year
+    expect(reviseYearDirection(y.value, { year: 2026, direction: "Иное", whyItMatters: "" }, T1)).toMatchObject({
+      ok: true,
+      value: { label: "До следующего дня рождения" },
+    });
+    expect(
+      reviseYearDirection(y.value, { year: 2027, label: "", direction: "Иное", whyItMatters: "" }, T1),
+    ).toMatchObject({ ok: true, value: { year: 2027, label: null } });
+    // existing callers that never pass a label get the plain calendar year
+    expect(createYearDirection({ id: "z", year: 2026, direction: "x", whyItMatters: "", now: T0 })).toMatchObject({
+      ok: true,
+      value: { label: null },
+    });
+  });
+
   it("rejects an out-of-range year and an empty direction", () => {
     expect(createYearDirection({ id: "y", year: 99, direction: "x", whyItMatters: "", now: T0 }).ok).toBe(false);
     expect(createYearDirection({ id: "y", year: 2026, direction: "", whyItMatters: "", now: T0 }).ok).toBe(false);
+  });
+});
+
+describe("period labels", () => {
+  it("name a decade by age while the years stay the anchor", () => {
+    const d = createDecadeItem({
+      id: "d",
+      startYear: 2066,
+      endYear: 2075,
+      statement: "Выбирать масштаб",
+      label: "65+",
+      others: [],
+      now: T0,
+    });
+    expect(d).toMatchObject({ ok: true, value: { label: "65+", startYear: 2066, endYear: 2075 } });
+    if (!d.ok) throw new Error("unreachable");
+    expect(rewordDecadeItem(d.value, "Выбирать масштаб из любопытства", T1)).toMatchObject({
+      ok: true,
+      value: { label: "65+" },
+    });
+    expect(
+      reviseDecadeItem(d.value, { startYear: 2066, endYear: 2075, statement: "x", label: "65–74" }, [], T1),
+    ).toMatchObject({ ok: true, value: { label: "65–74" } });
+  });
+
+  it("treat empty as no label and reject an over-long one", () => {
+    expect(normalizeStrategyLabel(undefined)).toEqual({ ok: true, value: null });
+    expect(normalizeStrategyLabel("   ")).toEqual({ ok: true, value: null });
+    expect(normalizeStrategyLabel("x".repeat(STRATEGY_LABEL_MAX + 1)).ok).toBe(false);
+    expect(
+      createYearDirection({
+        id: "y",
+        year: 2026,
+        label: "x".repeat(STRATEGY_LABEL_MAX + 1),
+        direction: "x",
+        whyItMatters: "",
+        now: T0,
+      }).ok,
+    ).toBe(false);
   });
 });

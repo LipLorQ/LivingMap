@@ -14,6 +14,10 @@ export const DECADE_PLAN_MAX_ITEMS = 12;
 export const DECADE_MAX_SPAN_YEARS = 10;
 export const HORIZON_SPAN_YEARS = 3;
 export const STRATEGY_TEXT_MAX = 200;
+/** The 3-year direction may hold a few owner sentences (direction, inner capability, outer result). */
+export const HORIZON_DIRECTION_MAX = 500;
+/** An owner-facing name of a period that is not a plain calendar range: «25–34», «65+», «До следующего дня рождения». */
+export const STRATEGY_LABEL_MAX = 60;
 
 /** One very short statement for one decade/range of years. Ordered by `startYear`; ranges never overlap. */
 export type DecadePlanItem = {
@@ -21,6 +25,8 @@ export type DecadePlanItem = {
   readonly startYear: number;
   readonly endYear: number;
   readonly statement: string;
+  /** How the owner names this range (e.g. by age: «25–34», «65+»). Null = show the years. The years stay the anchor. */
+  readonly label: string | null;
   readonly version: Version;
   readonly createdAt: Instant;
   readonly updatedAt: Instant;
@@ -42,7 +48,13 @@ export type ThreeYearHorizon = {
 /** The one current year direction. */
 export type YearDirection = {
   readonly id: EntityId;
+  /** The calendar year this direction was set in — the anchor for ordering and evidence. */
   readonly year: number;
+  /**
+   * The owner's own name for an annual horizon that is not the calendar year (e.g. «До следующего дня
+   * рождения»). Null = the calendar `year` itself. No end date is stored or guessed.
+   */
+  readonly label: string | null;
   readonly direction: string;
   /** One short sentence: why this matters for the 3-year horizon. May be empty. */
   readonly whyItMatters: string;
@@ -61,6 +73,16 @@ function normalizeRequired(text: string, max: number, label: string): DomainResu
 function normalizeOptional(text: string, max: number, label: string): DomainResult<string> {
   const trimmed = text.trim();
   if (trimmed.length > max) return { ok: false, reason: `${label} must be at most ${max} characters` };
+  return { ok: true, value: trimmed };
+}
+
+/** Empty means "no label": the period is then shown by its years. */
+export function normalizeStrategyLabel(label: string | null | undefined): DomainResult<string | null> {
+  const trimmed = (label ?? "").trim();
+  if (trimmed.length === 0) return { ok: true, value: null };
+  if (trimmed.length > STRATEGY_LABEL_MAX) {
+    return { ok: false, reason: `A period label must be at most ${STRATEGY_LABEL_MAX} characters` };
+  }
   return { ok: true, value: trimmed };
 }
 
@@ -108,6 +130,7 @@ export function createDecadeItem(input: {
   startYear: number;
   endYear: number;
   statement: string;
+  label?: string | null | undefined;
   /** Every other existing item (overlap and count checks). */
   others: readonly DecadePlanItem[];
   now: Instant;
@@ -119,6 +142,8 @@ export function createDecadeItem(input: {
   if (!statement.ok) return statement;
   const range = validateDecadeRange(input.startYear, input.endYear, input.others);
   if (!range.ok) return range;
+  const label = normalizeStrategyLabel(input.label);
+  if (!label.ok) return label;
   return {
     ok: true,
     value: {
@@ -126,6 +151,7 @@ export function createDecadeItem(input: {
       startYear: input.startYear,
       endYear: input.endYear,
       statement: statement.value,
+      label: label.value,
       version: 1,
       createdAt: input.now,
       updatedAt: input.now,
@@ -140,10 +166,10 @@ export function rewordDecadeItem(item: DecadePlanItem, statement: string, now: I
   return { ok: true, value: { ...item, statement: normalized.value, version: item.version + 1, updatedAt: now } };
 }
 
-/** MODE B — the direction itself changes (statement and/or years). `others` excludes `item` itself. */
+/** MODE B — the direction itself changes (statement, years and/or label; label omitted = kept). `others` excludes `item` itself. */
 export function reviseDecadeItem(
   item: DecadePlanItem,
-  input: { startYear: number; endYear: number; statement: string },
+  input: { startYear: number; endYear: number; statement: string; label?: string | null | undefined },
   others: readonly DecadePlanItem[],
   now: Instant,
 ): DomainResult<DecadePlanItem> {
@@ -151,6 +177,9 @@ export function reviseDecadeItem(
   if (!statement.ok) return statement;
   const range = validateDecadeRange(input.startYear, input.endYear, others);
   if (!range.ok) return range;
+  const label =
+    input.label === undefined ? ({ ok: true, value: item.label } as const) : normalizeStrategyLabel(input.label);
+  if (!label.ok) return label;
   return {
     ok: true,
     value: {
@@ -158,6 +187,7 @@ export function reviseDecadeItem(
       startYear: input.startYear,
       endYear: input.endYear,
       statement: statement.value,
+      label: label.value,
       version: item.version + 1,
       updatedAt: now,
     },
@@ -176,7 +206,7 @@ export function createHorizon(input: {
   if (input.startYear + HORIZON_SPAN_YEARS - 1 > MAX_STRATEGY_YEAR) {
     return { ok: false, reason: `Start year must leave room for ${HORIZON_SPAN_YEARS} years` };
   }
-  const direction = normalizeRequired(input.direction, STRATEGY_TEXT_MAX, "Horizon direction");
+  const direction = normalizeRequired(input.direction, HORIZON_DIRECTION_MAX, "Horizon direction");
   if (!direction.ok) return direction;
   const why = normalizeOptional(input.whyItMatters, STRATEGY_TEXT_MAX, "Why it matters");
   if (!why.ok) return why;
@@ -200,7 +230,7 @@ export function rewordHorizon(
   input: { direction: string; whyItMatters: string },
   now: Instant,
 ): DomainResult<ThreeYearHorizon> {
-  const direction = normalizeRequired(input.direction, STRATEGY_TEXT_MAX, "Horizon direction");
+  const direction = normalizeRequired(input.direction, HORIZON_DIRECTION_MAX, "Horizon direction");
   if (!direction.ok) return direction;
   const why = normalizeOptional(input.whyItMatters, STRATEGY_TEXT_MAX, "Why it matters");
   if (!why.ok) return why;
@@ -232,6 +262,7 @@ export function reviseHorizon(
 export function createYearDirection(input: {
   id: EntityId;
   year: number;
+  label?: string | null | undefined;
   direction: string;
   whyItMatters: string;
   now: Instant;
@@ -242,11 +273,14 @@ export function createYearDirection(input: {
   if (!direction.ok) return direction;
   const why = normalizeOptional(input.whyItMatters, STRATEGY_TEXT_MAX, "Why it matters");
   if (!why.ok) return why;
+  const label = normalizeStrategyLabel(input.label);
+  if (!label.ok) return label;
   return {
     ok: true,
     value: {
       id: input.id,
       year: input.year,
+      label: label.value,
       direction: direction.value,
       whyItMatters: why.value,
       version: 1,
@@ -271,12 +305,18 @@ export function rewordYearDirection(
   };
 }
 
+/** MODE B. `label` omitted = kept. */
 export function reviseYearDirection(
   year: YearDirection,
-  input: { year: number; direction: string; whyItMatters: string },
+  input: { year: number; label?: string | null | undefined; direction: string; whyItMatters: string },
   now: Instant,
 ): DomainResult<YearDirection> {
-  const created = createYearDirection({ id: year.id, ...input, now });
+  const created = createYearDirection({
+    id: year.id,
+    ...input,
+    label: input.label === undefined ? year.label : input.label,
+    now,
+  });
   if (!created.ok) return created;
   return { ok: true, value: { ...created.value, version: year.version + 1, createdAt: year.createdAt } };
 }

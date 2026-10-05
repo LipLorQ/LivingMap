@@ -266,6 +266,135 @@ describe("strategic layers: one map, far = coarse", () => {
     );
     expect(view(c).strategy.year?.isCurrentYear).toBe(false);
   });
+
+  it("an owner-named annual horizon («До следующего дня рождения») is shown by its name and never flagged by the calendar", () => {
+    const c = setup();
+    const ui = c.ui();
+    unwrap(
+      c.app.commands.saveStrategy(ui, {
+        level: "year",
+        year: 2025,
+        label: "До следующего дня рождения",
+        direction: "Машина",
+        whyItMatters: "",
+      }),
+    );
+    unwrap(
+      c.app.commands.saveStrategy(ui, {
+        level: "decade",
+        startYear: 2026,
+        endYear: 2035,
+        label: "25–34",
+        statement: "Личный капитал",
+      }),
+    );
+    const { strategy } = view(c);
+    expect(strategy.year).toMatchObject({ year: 2025, label: "До следующего дня рождения", isCurrentYear: true });
+    expect(strategy.decadePlan[0]).toMatchObject({ label: "25–34", startYear: 2026, endYear: 2035 });
+    const year = strategy.year as NonNullable<typeof strategy.year>;
+    const decade = strategy.decadePlan[0] as NonNullable<(typeof strategy.decadePlan)[0]>;
+
+    // renaming the period is a change of course, not a wording edit — for the year and for a decade
+    const before = revision(c);
+    expect(
+      c.app.commands.saveStrategy(ui, {
+        level: "year",
+        expectedVersion: year.version,
+        year: 2025,
+        label: "2026",
+        direction: "Машина",
+        whyItMatters: "",
+        mode: "wording",
+      }),
+    ).toMatchObject({ ok: false, error: { code: "VALIDATION_ERROR" } });
+    expect(
+      c.app.commands.saveStrategy(ui, {
+        level: "decade",
+        id: decade.id,
+        expectedVersion: decade.version,
+        startYear: 2026,
+        endYear: 2035,
+        label: "26–35",
+        statement: "Личный капитал",
+        mode: "wording",
+      }),
+    ).toMatchObject({ ok: false, error: { code: "VALIDATION_ERROR" } });
+    expect(revision(c)).toBe(before);
+
+    // a wording edit that resends the same label (or omits it) keeps the label
+    unwrap(
+      c.app.commands.saveStrategy(ui, {
+        level: "year",
+        expectedVersion: year.version,
+        year: 2025,
+        label: " До следующего дня рождения ",
+        direction: "Машина, яснее",
+        whyItMatters: "",
+        mode: "wording",
+      }),
+    );
+    expect(view(c).strategy.year).toMatchObject({ direction: "Машина, яснее", label: "До следующего дня рождения" });
+
+    // a course change may rename it; "" brings it back to the plain calendar year (then the calendar flags it)
+    const v2 = view(c).strategy.year as NonNullable<typeof strategy.year>;
+    unwrap(
+      c.app.commands.saveStrategy(ui, {
+        level: "year",
+        expectedVersion: v2.version,
+        year: 2025,
+        label: "",
+        direction: "Машина, яснее",
+        whyItMatters: "",
+        mode: "course",
+      }),
+    );
+    expect(view(c).strategy.year).toMatchObject({ label: null, isCurrentYear: false });
+  });
+
+  it("an owner-named annual horizon gathers evidence since it was set, not cut at 31 December", () => {
+    let now = "2026-10-05T10:00:00.000Z";
+    const app = createApplication({
+      store: memoryStore(),
+      clock: { now: () => now },
+      ids: sequentialIds(),
+      timeZone: () => "UTC",
+    });
+    const ui = () => app.newContext("user-ui", "test");
+    const close = (title: string) => {
+      const p = unwrap(app.commands.createIntention(ui(), { title, desiredResult: "" }));
+      unwrap(app.commands.changeIntentionStatus(ui(), { id: p.id, expectedVersion: p.version, to: "completed" }));
+    };
+    close("До года"); // closed before the annual horizon existed: not its evidence
+    now = "2026-10-05T11:00:00.000Z";
+    unwrap(
+      app.commands.saveStrategy(ui(), {
+        level: "year",
+        year: 2026,
+        label: "До следующего дня рождения",
+        direction: "Машина",
+        whyItMatters: "",
+      }),
+    );
+    now = "2026-12-20T10:00:00.000Z";
+    close("Декабрь");
+    now = "2027-03-01T10:00:00.000Z";
+    close("Март следующего календарного года");
+    const year = unwrap(app.queries.getCurrentView()).strategy.year;
+    expect(year).toMatchObject({ isCurrentYear: true, label: "До следующего дня рождения" });
+    expect(year?.evidence.map((e) => e.text)).toEqual(["Декабрь", "Март следующего календарного года"]);
+  });
+
+  it("the 3-year horizon holds the owner's direction, inner capability and outer result together", () => {
+    const c = setup();
+    const direction = [
+      "Стать машиной превращения идей в реальность.",
+      "Внутренняя способность: умею превращать идеи в законченные вещи и распространять их.",
+      "Внешний результат: сильные медиа, большая аудитория, устойчивый доход, ИИ-команда снимает операционку.",
+    ].join("\n");
+    expect(direction.length).toBeGreaterThan(200);
+    unwrap(c.app.commands.saveStrategy(c.ui(), { level: "horizon", startYear: 2026, direction, whyItMatters: "" }));
+    expect(view(c).strategy.horizon?.direction).toBe(direction);
+  });
 });
 
 describe("MODE A wording vs MODE B change of course", () => {

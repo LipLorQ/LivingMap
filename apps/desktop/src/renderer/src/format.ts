@@ -1,5 +1,13 @@
 import type { ImpactItemDto, ProjectProgressDto } from "@living-map/contracts";
 
+/**
+ * True once the local calendar day of `nowMs` differs from the day the figures were computed on
+ * (`computedAt`): «Сегодня» / «За неделю» then belong to a day that is over and must be re-read.
+ */
+export function isLaterLocalDay(computedAt: string, nowMs: number): boolean {
+  return new Date(computedAt).toDateString() !== new Date(nowMs).toDateString();
+}
+
 /** Russian plural: pluralRu(2, ["этап", "этапа", "этапов"]). */
 export function pluralRu(n: number, forms: readonly [string, string, string]): string {
   const mod100 = n % 100;
@@ -27,6 +35,11 @@ export function formatProgress(progress: ProjectProgressDto): string {
 /** «2026–2035», or a single year. */
 export function formatYears(startYear: number, endYear: number): string {
   return startYear === endYear ? `${startYear}` : `${startYear}–${endYear}`;
+}
+
+/** The owner's own name of a period («25–34», «До следующего дня рождения») when there is one, else its years. */
+export function formatPeriod(label: string | null, startYear: number, endYear: number): string {
+  return label ?? formatYears(startYear, endYear);
 }
 
 /** One affected thing in plain Russian: «Этот год: MVP», «Проект «X» (3 этапа, 12 действий в работе)». */

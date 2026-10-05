@@ -62,6 +62,8 @@ export const decadePlanItems = sqliteTable(
     startYear: integer("start_year").notNull(),
     endYear: integer("end_year").notNull(),
     statement: text("statement").notNull(),
+    /** Owner-facing name of the range (e.g. by age «25–34»); null = show the years. Added in Stage 9 (0018). */
+    label: text("label"),
     version: integer("version").notNull(),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
@@ -97,6 +99,8 @@ export const yearDirection = sqliteTable(
   {
     id: text("id").primaryKey(),
     year: integer("year").notNull(),
+    /** Owner's name for a non-calendar annual horizon («До следующего дня рождения»); null = the calendar year (0018). */
+    label: text("label"),
     direction: text("direction").notNull(),
     whyItMatters: text("why_it_matters").notNull(),
     version: integer("version").notNull(),

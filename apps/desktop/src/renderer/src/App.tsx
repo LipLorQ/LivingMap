@@ -13,7 +13,7 @@ import type {
   StageWithActionsDto,
 } from "@living-map/contracts";
 import { useCallback, useEffect, useState } from "react";
-import { PROJECT_LIMIT_TEXT } from "./format";
+import { isLaterLocalDay, PROJECT_LIMIT_TEXT } from "./format";
 import { MapScreen } from "./map";
 import { MemoryPanel } from "./memory";
 import { NowScreen } from "./now-screen";
@@ -59,6 +59,17 @@ export function App() {
     const id = setInterval(() => void reload(), 60_000);
     return () => clearInterval(id);
   }, [running, reload]);
+
+  // Idle overnight too (Stage 9 friction, 2026-10-05): with nothing written after midnight the screen kept
+  // yesterday's «Сегодня» and last week's «За неделю». Once the local day turns, re-read the figures.
+  const computedAt = view?.execution.computedAt;
+  useEffect(() => {
+    if (!computedAt) return;
+    const id = setInterval(() => {
+      if (isLaterLocalDay(computedAt, Date.now())) void reload();
+    }, 60_000);
+    return () => clearInterval(id);
+  }, [computedAt, reload]);
 
   const run = useCallback(
     async <T,>(action: Promise<Result<T>>): Promise<Result<T>> => {
