@@ -166,5 +166,15 @@ export const MIGRATIONS: ReadonlyArray<{ tag: string; statements: readonly strin
       "ALTER TABLE `decade_plan_items` ADD `label` text;",
       "ALTER TABLE `year_direction` ADD `label` text;"
     ]
+  },
+  {
+    "tag": "0019_stage9_day1",
+    "statements": [
+      "CREATE TABLE `household_items` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`text` text NOT NULL,\n\t`status` text NOT NULL,\n\t`source_capture_id` text,\n\t`version` integer NOT NULL,\n\t`created_at` text NOT NULL,\n\t`completed_at` text,\n\tFOREIGN KEY (`source_capture_id`) REFERENCES `captures`(`id`) ON UPDATE no action ON DELETE no action,\n\tCONSTRAINT \"household_items_status\" CHECK(\"household_items\".\"status\" IN ('active', 'done'))\n);",
+      "CREATE INDEX `household_items_status_idx` ON `household_items` (`status`,`created_at`);",
+      "CREATE UNIQUE INDEX `household_items_source_capture_idx` ON `household_items` (`source_capture_id`) WHERE \"household_items\".\"source_capture_id\" IS NOT NULL;",
+      "ALTER TABLE `settings` ADD `selected_intention_id` text;",
+      "ALTER TABLE `stages` ADD `archived_at` text;"
+    ]
   }
 ];

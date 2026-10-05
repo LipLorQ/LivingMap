@@ -97,7 +97,7 @@ test("Stage 3: an external AI proposal appears live, is reviewed in Russian, rej
   const app = await launch();
   const win = await app.firstWindow();
   await seed(win);
-  // Stage 4: manual/AI-route review lives behind the "Замысел" tab; "Сейчас" is the default screen.
+  // Stage 4: manual/AI-route review lives behind the «Проекты» tab; "Сейчас" is the default screen.
   await win.getByTestId("nav-editor").click();
   await expect(win.getByTestId("plan-empty")).toBeVisible();
   mcp = await connectMcp();

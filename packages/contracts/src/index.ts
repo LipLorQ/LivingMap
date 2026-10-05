@@ -71,6 +71,18 @@ export {
   ReorderGoodLifeConditionsInputSchema,
 } from "./good-life-condition";
 export type {
+  AddHouseholdItemInput,
+  CompleteHouseholdItemInput,
+  HouseholdItemDto,
+  HouseholdListDto,
+} from "./household";
+export {
+  AddHouseholdItemInputSchema,
+  CompleteHouseholdItemInputSchema,
+  HouseholdItemDtoSchema,
+  HouseholdListDtoSchema,
+} from "./household";
+export type {
   ChangeIntentionStatusInput,
   CreateIntentionInput,
   IntentionDto,
@@ -110,6 +122,12 @@ export {
 } from "./pattern";
 export type { OrderedActionPlanDto, ReorderExistingActionsInput } from "./plan";
 export { OrderedActionPlanDtoSchema, RationaleSchema, ReorderExistingActionsInputSchema } from "./plan";
+export type { ApprovedProjectPlan, ProjectPlanReplacementDto, ReplaceProjectPlanInput } from "./project-plan";
+export {
+  ApprovedProjectPlanSchema,
+  ProjectPlanReplacementDtoSchema,
+  ReplaceProjectPlanInputSchema,
+} from "./project-plan";
 export type {
   CreateRouteProposalInput,
   DesiredResultPayload,
@@ -249,5 +267,10 @@ export {
   StageWithActionsDtoSchema,
   WhyNowReasonSchema,
 } from "./view";
-export type { ExecutionDto, SetDailyWorkTargetInput, WorkActionInput } from "./work";
-export { ExecutionDtoSchema, SetDailyWorkTargetInputSchema, WorkActionInputSchema } from "./work";
+export type { ExecutionDto, SelectWorkProjectInput, SetDailyWorkTargetInput, WorkActionInput } from "./work";
+export {
+  ExecutionDtoSchema,
+  SelectWorkProjectInputSchema,
+  SetDailyWorkTargetInputSchema,
+  WorkActionInputSchema,
+} from "./work";

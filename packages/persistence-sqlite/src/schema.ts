@@ -181,6 +181,11 @@ export const stages = sqliteTable(
     version: integer("version").notNull(),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
+    /**
+     * Set when an owner-approved plan replaced the project's structure (Stage 9, 0019): the Stage and its
+     * Actions stay as history (work time, completions, reviews) but are no longer part of the route.
+     */
+    archivedAt: text("archived_at"),
   },
   (t) => [
     index("stages_intention_idx").on(t.intentionId),
@@ -263,6 +268,12 @@ export const settings = sqliteTable(
   {
     id: integer("id").primaryKey(),
     dailyWorkTargetMinutes: integer("daily_work_target_minutes").notNull(),
+    /**
+     * The active project the owner chose to work on (Stage 9, 0019); null = follow the project order. A stale
+     * id (the project is no longer active) is simply ignored by the read model and cleared by the next owner
+     * status change of that project.
+     */
+    selectedIntentionId: text("selected_intention_id"),
   },
   (t) => [check("settings_single_row", sql`${t.id} = 1`)],
 );
@@ -463,5 +474,31 @@ export const planningRules = sqliteTable(
   (t) => [
     index("planning_rules_status_idx").on(t.status),
     foreignKey({ columns: [t.sourcePatternId], foreignColumns: [patterns.id] }),
+  ],
+);
+
+/**
+ * «Быт» (Stage 9, 0019): small one-off errands of everyday life. Deliberately unrelated to projects, the
+ * order, `Сейчас` and work time — no foreign key to any of them. One item per accepted «+» suggestion.
+ */
+export const householdItems = sqliteTable(
+  "household_items",
+  {
+    id: text("id").primaryKey(),
+    text: text("text").notNull(),
+    /** 'active' | 'done'. */
+    status: text("status").notNull(),
+    sourceCaptureId: text("source_capture_id"),
+    version: integer("version").notNull(),
+    createdAt: text("created_at").notNull(),
+    completedAt: text("completed_at"),
+  },
+  (t) => [
+    index("household_items_status_idx").on(t.status, t.createdAt),
+    uniqueIndex("household_items_source_capture_idx")
+      .on(t.sourceCaptureId)
+      .where(sql`${t.sourceCaptureId} IS NOT NULL`),
+    foreignKey({ columns: [t.sourceCaptureId], foreignColumns: [captures.id] }),
+    check("household_items_status", sql`${t.status} IN ('active', 'done')`),
   ],
 );

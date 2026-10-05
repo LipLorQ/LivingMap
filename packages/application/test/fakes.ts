@@ -4,6 +4,7 @@ import type {
   CourseChange,
   DecadePlanItem,
   GoodLifeCondition,
+  HouseholdItem,
   Instant,
   Intention,
   OrderedActionPlan,
@@ -54,7 +55,25 @@ export function memoryStore(): Store & { revision: number; changes: string[]; ro
   const calendarReader = { get: () => calendarRow };
   // Execution (Stage 5) is exercised against real SQLite (persistence-sqlite/test/execution.test.ts).
   const workReader = { findRunning: () => undefined, listByAction: () => [], listEndedSince: () => [] };
-  const settingsReader = { dailyWorkTargetMinutes: () => 360 };
+  let selectedIntentionId: string | null = null;
+  const settingsReader = { dailyWorkTargetMinutes: () => 360, selectedIntentionId: () => selectedIntentionId };
+  // Stages archived by an owner-approved plan replacement (Stage 9): history, never returned as live.
+  const archivedStageIds = new Set<string>();
+  const liveStage = (id: string) => (archivedStageIds.has(id) ? undefined : stageRows.get(id));
+  const liveStagesOf = (iid: string) =>
+    byPosition([...stageRows.values()].filter((st) => st.intentionId === iid && !archivedStageIds.has(st.id)));
+  const householdRows = new Map<string, HouseholdItem>();
+  const householdReader = {
+    findById: (id: string) => householdRows.get(id),
+    listActive: () => [...householdRows.values()].filter((h) => h.status === "active"),
+    listRecentlyDone: (limit: number) =>
+      [...householdRows.values()]
+        .filter((h) => h.status === "done")
+        .reverse()
+        .slice(0, limit),
+    listBySourceCaptures: (ids: readonly string[]) =>
+      [...householdRows.values()].filter((h) => h.sourceCaptureId !== null && ids.includes(h.sourceCaptureId)),
+  };
   // Captures / Memory (Stage 6) are exercised against real SQLite (persistence-sqlite/test/capture.test.ts).
   const capturesReader = {
     findById: () => undefined,
@@ -172,10 +191,7 @@ export function memoryStore(): Store & { revision: number; changes: string[]; ro
           findById: (id) => intentionRows.get(id),
           list: () => [...intentionRows.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
         },
-        stages: {
-          findById: (id) => stageRows.get(id),
-          listByIntention: (iid) => byPosition([...stageRows.values()].filter((s) => s.intentionId === iid)),
-        },
+        stages: { findById: liveStage, listByIntention: liveStagesOf },
         actions: {
           findById: (id) => actionRows.get(id),
           listByStage: (sid) => byPosition([...actionRows.values()].filter((a) => a.stageId === sid)),
@@ -195,6 +211,7 @@ export function memoryStore(): Store & { revision: number; changes: string[]; ro
         calendar: calendarReader,
         work: workReader,
         settings: settingsReader,
+        household: householdReader,
         captures: { ...capturesReader, listCreatedBetween: () => [] },
         memories: { ...memoriesReader, listCreatedBetween: () => [] },
         reviews: reviewsReader,
@@ -388,8 +405,8 @@ export function memoryStore(): Store & { revision: number; changes: string[]; ro
             },
           },
           stages: {
-            findById: (id) => stageRows.get(id),
-            listByIntention: (iid) => byPosition([...stageRows.values()].filter((s) => s.intentionId === iid)),
+            findById: liveStage,
+            listByIntention: liveStagesOf,
             insert: (s) => void stageRows.set(s.id, s),
             updateIfVersion: (s, expected) => {
               if (stageRows.get(s.id)?.version !== expected) return false;
@@ -408,6 +425,14 @@ export function memoryStore(): Store & { revision: number; changes: string[]; ro
                 stageRows.set(id, { ...s, isCurrent: id === stageId, version: s.version + 1, updatedAt: now });
               }
             },
+            archive: (ids, now) => {
+              for (const id of ids) {
+                const cur = liveStage(id);
+                if (!cur) continue;
+                stageRows.set(id, { ...cur, isCurrent: false, version: cur.version + 1, updatedAt: now });
+                archivedStageIds.add(id);
+              }
+            },
           },
           actions: {
             findById: (id) => actionRows.get(id),
@@ -419,6 +444,11 @@ export function memoryStore(): Store & { revision: number; changes: string[]; ro
               ),
             insert: (a) => void actionRows.set(a.id, a),
             updateIfVersion: (a, expected) => {
+              if (actionRows.get(a.id)?.version !== expected) return false;
+              actionRows.set(a.id, a);
+              return true;
+            },
+            relocateIfVersion: (a, expected) => {
               if (actionRows.get(a.id)?.version !== expected) return false;
               actionRows.set(a.id, a);
               return true;
@@ -455,7 +485,22 @@ export function memoryStore(): Store & { revision: number; changes: string[]; ro
             },
           },
           work: { ...workReader, insert: () => {}, closeIfRunning: () => false },
-          settings: { ...settingsReader, setDailyWorkTargetMinutes: () => {} },
+          settings: {
+            ...settingsReader,
+            setDailyWorkTargetMinutes: () => {},
+            setSelectedIntentionId: (id) => {
+              selectedIntentionId = id;
+            },
+          },
+          household: {
+            ...householdReader,
+            insert: (h) => void householdRows.set(h.id, h),
+            completeIfActive: (h) => {
+              if (householdRows.get(h.id)?.status !== "active") return false;
+              householdRows.set(h.id, h);
+              return true;
+            },
+          },
           captures: {
             ...capturesReader,
             listCreatedBetween: () => [],

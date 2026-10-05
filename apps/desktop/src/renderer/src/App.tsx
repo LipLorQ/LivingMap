@@ -14,6 +14,7 @@ import type {
 } from "@living-map/contracts";
 import { useCallback, useEffect, useState } from "react";
 import { isLaterLocalDay, PROJECT_LIMIT_TEXT } from "./format";
+import { HouseholdPanel } from "./household";
 import { MapScreen } from "./map";
 import { MemoryPanel } from "./memory";
 import { NowScreen } from "./now-screen";
@@ -23,10 +24,10 @@ import { ReviewsPanel } from "./reviews";
 import { RoutineSection } from "./routines";
 import { EditableText, ReorderButtons } from "./shared-ui";
 
-type Tab = "now" | "map" | "editor" | "memory" | "reviews";
+type Tab = "now" | "map" | "editor" | "household" | "memory" | "reviews";
 
 // Stage 4: "Сейчас" is the default screen (execution interface); the previous utilitarian
-// editing screen moves behind a "Замысел" tab (direct editing / fallback, per Stage 4 §15).
+// editing screen moves behind a «Проекты» tab (direct editing / fallback, per Stage 4 §15).
 export function App() {
   const [view, setView] = useState<CurrentViewDto | null>(null);
   const [history, setHistory] = useState<ChangeLogEntryDto[]>([]);
@@ -137,7 +138,16 @@ export function App() {
             className={tab === "editor" ? "font-semibold underline" : ""}
             onClick={() => setTab("editor")}
           >
-            Замыслы
+            Проекты
+          </button>
+          <button
+            type="button"
+            data-testid="nav-household"
+            aria-current={tab === "household"}
+            className={tab === "household" ? "font-semibold underline" : ""}
+            onClick={() => setTab("household")}
+          >
+            Быт
           </button>
           <button
             type="button"
@@ -180,6 +190,9 @@ export function App() {
           pendingProposalIds={new Set(view.pendingProposals.filter((p) => p.status === "pending").map((p) => p.id))}
           onSubmit={(rawText) => run(window.livingMap.commands.submitCapture({ rawText }))}
           onRetry={(id) => run(window.livingMap.commands.retryCapture({ id }))}
+          onAddHousehold={(sourceCaptureId, text) =>
+            run(window.livingMap.commands.addHouseholdItem({ text, sourceCaptureId }))
+          }
         />
       )}
 
@@ -189,7 +202,12 @@ export function App() {
         onReject={(id) => run(window.livingMap.commands.rejectProposal({ id }))}
       />
 
-      {tab === "memory" ? (
+      {tab === "household" ? (
+        <HouseholdPanel
+          onAdd={(text) => run(window.livingMap.commands.addHouseholdItem({ text }))}
+          onComplete={(id) => run(window.livingMap.commands.completeHouseholdItem({ id }))}
+        />
+      ) : tab === "memory" ? (
         <MemoryPanel onForget={(id) => run(window.livingMap.commands.forgetMemory({ id }))} />
       ) : tab === "reviews" ? (
         <ReviewsPanel
@@ -209,7 +227,14 @@ export function App() {
           onConnectCalendar={(icalUrl) => run(window.livingMap.commands.connectCalendar({ icalUrl }))}
           onRefreshCalendar={() => run(window.livingMap.commands.refreshCalendar())}
           onDisconnectCalendar={() => run(window.livingMap.commands.disconnectCalendar())}
-          onAskReplan={() => askAi("Перестрой текущий порядок действий.")}
+          onAskReplan={(projectTitle) =>
+            askAi(
+              projectTitle
+                ? `Перестрой порядок действий проекта «${projectTitle}».`
+                : "Перестрой текущий порядок действий.",
+            )
+          }
+          onSelectProject={(intentionId) => run(window.livingMap.commands.selectWorkProject({ intentionId }))}
           onOpenMap={() => setTab("map")}
           execution={executionHandlers}
         />
@@ -330,8 +355,8 @@ const HISTORY_LABELS: Record<string, string> = {
   "goodLifeCondition.edit": "Изменено ограничение",
   "goodLifeCondition.remove": "Удалено ограничение",
   "goodLifeCondition.reorder": "Изменён порядок ограничений",
-  "intention.create": "Создан замысел",
-  "intention.update": "Изменён замысел",
+  "intention.create": "Создан проект",
+  "intention.update": "Изменён проект",
   "intention.complete": "Проект завершён",
   "intention.release": "Проект отпущен",
   "intention.defer": "Проект поставлен на паузу",
@@ -372,6 +397,10 @@ const HISTORY_LABELS: Record<string, string> = {
   "work.pause": "Работа поставлена на паузу",
   "work.recover": "Работа поставлена на паузу после сбоя",
   "settings.dailyWorkTarget": "Изменена рабочая норма",
+  "work.selectProject": "Выбран проект для работы",
+  "plan.replace": "Проект получил утверждённый план",
+  "household.add": "Добавлено дело в «Быт»",
+  "household.complete": "Сделано дело из «Быта»",
   "capture.create": "Сохранена запись «+»",
   "capture.retry": "Запись «+» снова ждёт ИИ",
   "capture.processed": "ИИ разобрал запись «+»",
@@ -529,7 +558,7 @@ function CreateIntentionForm({
   const [desiredResult, setDesiredResult] = useState("");
   return (
     <section data-testid="intention-create" className="space-y-2 rounded border p-3">
-      <h2 className="font-semibold">Новый замысел</h2>
+      <h2 className="font-semibold">Новый проект</h2>
       {full && (
         <p data-testid="intention-limit-note" className="text-amber-800">
           {PROJECT_LIMIT_TEXT}
@@ -538,14 +567,14 @@ function CreateIntentionForm({
       <input
         data-testid="intention-title-new"
         className="w-full rounded border px-2 py-1"
-        placeholder="Название замысла"
+        placeholder="Название проекта"
         value={title}
         onChange={(e) => setTitle(e.target.value)}
       />
       <textarea
         data-testid="intention-desired-result-new"
         className="w-full rounded border px-2 py-1"
-        placeholder="Что должно стать реальностью, чтобы этот замысел считался воплощённым?"
+        placeholder="Что должно стать реальностью, чтобы этот проект считался воплощённым?"
         value={desiredResult}
         onChange={(e) => setDesiredResult(e.target.value)}
       />
@@ -558,7 +587,7 @@ function CreateIntentionForm({
           setDesiredResult("");
         }}
       >
-        Создать замысел
+        Создать проект
       </button>
     </section>
   );
@@ -623,7 +652,7 @@ function IntentionEditor(props: IntentionSectionProps & { intention: IntentionDt
   return (
     <section data-testid="intention" className="space-y-3 rounded border p-3">
       <h2 className="font-semibold">
-        Замысел
+        Проект
         {intention.status === "deferred" && <span className="ml-2 font-normal text-neutral-500">на паузе</span>}
       </h2>
       <input
@@ -645,7 +674,7 @@ function IntentionEditor(props: IntentionSectionProps & { intention: IntentionDt
           data-testid="intention-save"
           onClick={() => props.onUpdateIntention(intention.id, intention.version, titleDraft, resultDraft)}
         >
-          Сохранить замысел
+          Сохранить проект
         </button>
       )}
 

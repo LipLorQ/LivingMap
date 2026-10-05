@@ -32,3 +32,10 @@ export const SetDailyWorkTargetInputSchema = z.strictObject({
     .max(24 * 60),
 });
 export type SetDailyWorkTargetInput = z.infer<typeof SetDailyWorkTargetInputSchema>;
+
+/**
+ * «Над каким проектом я сейчас работаю?» (Stage 9, Day 1): the owner picks any active project as the work
+ * context of `Сейчас`. Not a strategic reorder — project order and every plan stay exactly as they are.
+ */
+export const SelectWorkProjectInputSchema = z.strictObject({ intentionId: Id });
+export type SelectWorkProjectInput = z.infer<typeof SelectWorkProjectInputSchema>;

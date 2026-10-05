@@ -3,9 +3,11 @@ import {
   type ActionDto,
   type AddActionInput,
   type AddGoodLifeConditionInput,
+  type AddHouseholdItemInput,
   type AddRoutineItemInput,
   type AddStageInput,
   AiFailureSchema,
+  type ApprovedProjectPlan,
   type BlockActionInput,
   type CalendarSnapshotDto,
   CaptureAiResultSchema,
@@ -13,6 +15,7 @@ import {
   type ChangeIntentionStatusInput,
   type ChangeLogEntryDto,
   type CompleteActionInput,
+  type CompleteHouseholdItemInput,
   type ConfirmPatternInput,
   type CorrectReviewFindingInput,
   type CourseImpactDto,
@@ -31,6 +34,8 @@ import {
   type GetProposalInput,
   type GetReviewInput,
   type GoodLifeConditionDto,
+  type HouseholdItemDto,
+  type HouseholdListDto,
   type IntentionDto,
   type ListCapturesInput,
   type ListChangeHistoryInput,
@@ -44,6 +49,7 @@ import {
   type PlanningContextDto,
   type PlanningRuleDto,
   type PreviewCourseImpactInput,
+  type ProjectPlanReplacementDto,
   type ProposalDto,
   type ProposeDesiredResultChangeInput,
   type RejectPatternInput,
@@ -58,6 +64,7 @@ import {
   type ReorderProjectsInput,
   type ReorderRoutineItemsInput,
   type ReorderStagesInput,
+  type ReplaceProjectPlanInput,
   type ResolveCourseChangeInput,
   type ResolveProposalInput,
   type Result,
@@ -74,6 +81,7 @@ import {
   type SaveStrategyInput,
   type SearchMemoryInput,
   type SeasonDto,
+  type SelectWorkProjectInput,
   type SetCurrentStageInput,
   type SetDailyWorkTargetInput,
   type StageDto,
@@ -98,6 +106,7 @@ import {
   changeIntentionStatus,
   closeAt,
   completeAction,
+  completeHouseholdItem,
   computeCourseImpact,
   computeReorder,
   confirmPattern,
@@ -108,6 +117,7 @@ import {
   createDecadeItem,
   createGoodLifeCondition,
   createHorizon,
+  createHouseholdItem,
   createIntention,
   createMemory,
   createPatternCandidate,
@@ -129,9 +139,11 @@ import {
   editStageTitle,
   type GoodLifeCondition,
   growPatternCandidate,
+  type HouseholdItem,
   hasRoomForActive,
   type ImpactItem,
   type Instant,
+  type Intention,
   impactFingerprint,
   isAtVersion,
   isSilent,
@@ -142,7 +154,9 @@ import {
   nextActivePosition,
   type Pattern,
   type PlanningRule,
+  type PlanReplacement,
   type Proposal,
+  replaceProjectPlan as planReplacement,
   REVIEW_AUTO_RETRY_ATTEMPTS,
   type Review,
   type ReviewFinding,
@@ -192,6 +206,7 @@ import {
   PLANNING_MEANINGS,
   parsePayload,
   routeChangeFromPayload,
+  shortDigest,
   toPlanDto,
   toProposalDto,
 } from "./planning";
@@ -223,6 +238,7 @@ export type ApplicationDeps = {
 export { WORK_HEARTBEAT_GAP_MS };
 
 const toGoodLifeConditionDto = (c: GoodLifeCondition): GoodLifeConditionDto => ({ ...c });
+const toHouseholdItemDto = ({ version: _version, ...item }: HouseholdItem): HouseholdItemDto => item;
 const toChangeLogEntryDto = (entry: ChangeLogEntry): ChangeLogEntryDto => ({ ...entry });
 // sourceCaptureVerified (M-A) is internal Pattern-provenance bookkeeping, never exposed on the DTO.
 const toMemoryDto = (m: Memory): MemoryDto => ({
@@ -293,8 +309,9 @@ const toPlanningRuleDto = (r: PlanningRule): PlanningRuleDto => ({ ...r });
 const FORGOTTEN_REPLY = "Этого больше нет в памяти.";
 
 /** Stored JSON is re-validated on the way out: an unreadable result/error reads as absent, never as trusted. */
-function toCaptureDtos(s: Pick<ReadScope, "memories">, captures: readonly Capture[]): CaptureDto[] {
+function toCaptureDtos(s: Pick<ReadScope, "memories" | "household">, captures: readonly Capture[]): CaptureDto[] {
   const memories = s.memories.listBySourceCaptures(captures.map((c) => c.id));
+  const errands = s.household.listBySourceCaptures(captures.map((c) => c.id));
   return captures.map((c) => {
     const result = CaptureAiResultSchema.safeParse(c.result);
     const lastError = AiFailureSchema.safeParse(c.lastError);
@@ -314,6 +331,7 @@ function toCaptureDtos(s: Pick<ReadScope, "memories">, captures: readonly Captur
       result: !result.success ? null : forgotten ? { ...result.data, reply: FORGOTTEN_REPLY } : result.data,
       proposalId: c.proposalId,
       memories: own,
+      householdItemId: errands.find((h) => h.sourceCaptureId === c.id)?.id ?? null,
     };
   });
 }
@@ -366,7 +384,7 @@ export function createApplication(deps: ApplicationDeps) {
     const tz = timeZone();
     // One batched query per project instead of one per Stage: this view is re-fetched after every write
     // (via the revision watcher), so an N+1 here would recur continuously.
-    const focusState = loadFocusState(s, now, workingActionId(s, now));
+    const focusState = loadFocusState(s, now, workingActionId(s, now), s.settings.selectedIntentionId());
     const { focus, currentAction, needsAiReplan } = focusState;
     const focusView = focus ? toProjectViewDto(focus) : undefined;
     const activeCount = focusState.projects.filter((p) => p.intention.status === "active").length;
@@ -386,6 +404,7 @@ export function createApplication(deps: ApplicationDeps) {
         .listPending()
         .map((p) => toProposalDto(s, p, now))
         .filter((p): p is ProposalDto => p !== undefined),
+      selectedProjectId: focusState.selectedProjectId,
       currentAction,
       needsAiReplan,
       calendarSnapshot: s.calendar.get(),
@@ -414,7 +433,9 @@ export function createApplication(deps: ApplicationDeps) {
 
   /** The `Сейчас` Action as the view would show it — the only Action work may start on. */
   function currentActionId(s: ReadScope | WriteScope, now: Instant): EntityId | null {
-    return loadFocusState(s, now, workingActionId(s, now)).currentAction?.actionId ?? null;
+    return (
+      loadFocusState(s, now, workingActionId(s, now), s.settings.selectedIntentionId()).currentAction?.actionId ?? null
+    );
   }
 
   function execution(s: Pick<ReadScope, "work" | "settings">, actionId: EntityId | null, now: Instant): ExecutionDto {
@@ -723,6 +744,80 @@ export function createApplication(deps: ApplicationDeps) {
     const action = s.actions.findById(running.actionId);
     const stage = action && s.stages.findById(action.stageId);
     if (stage?.intentionId === intentionId) s.work.closeIfRunning(running.id, closeAt(running, at));
+  }
+
+  /**
+   * An Action the commands may still touch: it exists AND its Stage is still part of the project's route. An
+   * Action left in a Stage archived by an owner-approved plan replacement is history, never edited again.
+   */
+  function routeAction(s: WriteScope, id: EntityId) {
+    const action = s.actions.findById(id);
+    return action && s.stages.findById(action.stageId) ? action : undefined;
+  }
+
+  /** The owner-approved plan as it would be applied — the same pure domain function for preview and apply. */
+  function computePlanReplacement(
+    s: ReadScope | WriteScope,
+    input: ApprovedProjectPlan,
+  ): Result<{
+    intention: Intention;
+    before: ReturnType<typeof intentionTree>;
+    outcome: PlanReplacement;
+    fingerprint: string;
+  }> {
+    const intention = s.intentions.findById(input.intentionId);
+    if (!intention) return err("NOT_FOUND", "Project not found");
+    if (intention.status !== "active" && intention.status !== "deferred") {
+      return err("VALIDATION_ERROR", "Only an active or paused project can get a new plan");
+    }
+    const before = intentionTree(s, intention.id);
+    const outcome = planReplacement({
+      intentionId: intention.id,
+      stages: before.stages,
+      actions: before.actions,
+      approved: input.stages,
+      nextId: () => ids.next(),
+      now: clock.now(),
+    });
+    if (!outcome.ok) return err("VALIDATION_ERROR", outcome.reason);
+    const { intentionId, rationale, stages } = input;
+    const fingerprint = shortDigest(
+      `${contextFingerprint(s, intention.id)}|${JSON.stringify({ intentionId, rationale, stages })}`,
+    );
+    return ok({ intention, before, outcome: outcome.value, fingerprint });
+  }
+
+  function toPlanReplacementDto(
+    intention: Intention,
+    before: ReturnType<typeof intentionTree>,
+    outcome: PlanReplacement,
+    fingerprint: string,
+  ): ProjectPlanReplacementDto {
+    const carried = new Set(outcome.movedActions.map((a) => a.id));
+    const placed = [...outcome.insertedActions, ...outcome.movedActions];
+    const byId = new Map(placed.map((a) => [a.id, a]));
+    const firstId =
+      outcome.orderedActionIds.find((id) => byId.get(id)?.status === "open") ?? (outcome.orderedActionIds[0] as string);
+    return {
+      intentionId: intention.id,
+      projectTitle: intention.title,
+      stages: outcome.stages.map((stage) => ({
+        title: stage.title,
+        isCurrent: stage.isCurrent,
+        actions: placed
+          .filter((a) => a.stageId === stage.id)
+          .sort((a, b) => a.position - b.position)
+          .map((a) => ({ id: a.id, title: a.title, status: a.status, carried: carried.has(a.id) })),
+      })),
+      archivedStages: before.stages.map((stage) => ({ id: stage.id, title: stage.title })),
+      leftBehindActions: outcome.leftBehindActionIds.map((id) => ({
+        id,
+        title: before.actions.find((a) => a.id === id)?.title ?? "",
+      })),
+      keptDoneActions: before.actions.filter((a) => a.status === "done" && !carried.has(a.id)).length,
+      firstAction: { id: firstId, title: byId.get(firstId)?.title ?? "" },
+      fingerprint,
+    };
   }
 
   /**
@@ -1041,6 +1136,31 @@ export function createApplication(deps: ApplicationDeps) {
             const items = computeCourseImpact(state, input.level, input.targetId ?? null, proposed);
             return ok(toCourseImpactDto(input.level, input.targetId ?? null, items));
           }),
+        ),
+
+      /**
+       * Dry run of an owner-approved plan (Stage 9): exactly what `replaceProjectPlan` would do, nothing
+       * written. The new ids it shows are throwaway — applying generates its own.
+       */
+      previewProjectPlanReplacement: (input: ApprovedProjectPlan): Result<ProjectPlanReplacementDto> =>
+        guarded("previewProjectPlanReplacement", () =>
+          store.read((s) => {
+            const computed = computePlanReplacement(s, input);
+            if (!computed.ok) return computed;
+            const { intention, before, outcome, fingerprint } = computed.value;
+            return ok(toPlanReplacementDto(intention, before, outcome, fingerprint));
+          }),
+        ),
+
+      /** «Быт»: active errands (oldest first) and the 20 most recently done. Never part of the AI context. */
+      listHouseholdItems: (): Result<HouseholdListDto> =>
+        guarded("listHouseholdItems", () =>
+          ok(
+            store.read((s) => ({
+              active: s.household.listActive().map(toHouseholdItemDto),
+              recentlyDone: s.household.listRecentlyDone(20).map(toHouseholdItemDto),
+            })),
+          ),
         ),
 
       getProposal: (input: GetProposalInput): Result<ProposalDto> =>
@@ -1448,7 +1568,7 @@ export function createApplication(deps: ApplicationDeps) {
         authorize("action.edit", ctx) ??
         guarded("editAction", () =>
           transact(ctx, (s): Result<ActionDto> => {
-            const current = s.actions.findById(input.id);
+            const current = routeAction(s, input.id);
             if (!current) return err("NOT_FOUND", "Action not found");
             if (!isAtVersion(current, input.expectedVersion)) {
               return err("CONFLICT_RELOAD", `Action changed (now v${current.version}); reload and retry`);
@@ -1472,7 +1592,7 @@ export function createApplication(deps: ApplicationDeps) {
         authorize("action.complete", ctx) ??
         guarded("completeAction", () =>
           transact(ctx, (s): Result<ActionDto> => {
-            const current = s.actions.findById(input.id);
+            const current = routeAction(s, input.id);
             if (!current) return err("NOT_FOUND", "Action not found");
             if (!isAtVersion(current, input.expectedVersion)) {
               return err("CONFLICT_RELOAD", `Action changed (now v${current.version}); reload and retry`);
@@ -1498,7 +1618,7 @@ export function createApplication(deps: ApplicationDeps) {
         authorize("action.block", ctx) ??
         guarded("blockAction", () =>
           transact(ctx, (s): Result<ActionDto> => {
-            const current = s.actions.findById(input.id);
+            const current = routeAction(s, input.id);
             if (!current) return err("NOT_FOUND", "Action not found");
             if (!isAtVersion(current, input.expectedVersion)) {
               return err("CONFLICT_RELOAD", `Action changed (now v${current.version}); reload and retry`);
@@ -1524,7 +1644,7 @@ export function createApplication(deps: ApplicationDeps) {
         authorize("action.unblock", ctx) ??
         guarded("unblockAction", () =>
           transact(ctx, (s): Result<ActionDto> => {
-            const current = s.actions.findById(input.id);
+            const current = routeAction(s, input.id);
             if (!current) return err("NOT_FOUND", "Action not found");
             if (!isAtVersion(current, input.expectedVersion)) {
               return err("CONFLICT_RELOAD", `Action changed (now v${current.version}); reload and retry`);
@@ -1548,7 +1668,7 @@ export function createApplication(deps: ApplicationDeps) {
         authorize("action.reopen", ctx) ??
         guarded("reopenAction", () =>
           transact(ctx, (s): Result<ActionDto> => {
-            const current = s.actions.findById(input.id);
+            const current = routeAction(s, input.id);
             if (!current) return err("NOT_FOUND", "Action not found");
             if (!isAtVersion(current, input.expectedVersion)) {
               return err("CONFLICT_RELOAD", `Action changed (now v${current.version}); reload and retry`);
@@ -1572,6 +1692,7 @@ export function createApplication(deps: ApplicationDeps) {
         authorize("action.reorder", ctx) ??
         guarded("reorderActions", () =>
           transact(ctx, (s): Result<ActionDto[]> => {
+            if (!s.stages.findById(input.stageId)) return err("NOT_FOUND", "Stage not found");
             const current = s.actions.listByStage(input.stageId);
             const positions = computeReorder(
               current.map((action) => action.id),
@@ -1609,6 +1730,10 @@ export function createApplication(deps: ApplicationDeps) {
             if (input.to !== "active") stopWorkInProject(s, input.id, now);
             if (!s.intentions.updateIfVersion(changed.value, input.expectedVersion)) {
               return err("CONFLICT_RELOAD", "Intention changed concurrently; reload and retry");
+            }
+            // A project that leaves the active state can no longer be the one the owner works on.
+            if (input.to !== "active" && s.settings.selectedIntentionId() === input.id) {
+              s.settings.setSelectedIntentionId(null);
             }
             const commandType =
               input.to === "completed"
@@ -2143,6 +2268,166 @@ export function createApplication(deps: ApplicationDeps) {
               summary: `${input.minutes}`,
             });
             return ok(execution(s, currentActionId(s, now), now));
+          }),
+        ),
+
+      /**
+       * «Над каким проектом я сейчас работаю?» (Stage 9, Day 1). The owner may pick any active project with
+       * something admissible in its order; `Сейчас` then follows THAT project's own approved order until she
+       * picks another. Not strategy: project order, plans and versions stay untouched (no proposal goes stale).
+       * Work running on another project is paused first — never two running intervals, never time moved
+       * across projects — and nothing is started on the new one: the owner presses «Начать» herself.
+       */
+      selectWorkProject: (ctx: CommandContext, input: SelectWorkProjectInput): Result<null> =>
+        authorize("work.selectProject", ctx) ??
+        guarded("selectWorkProject", () =>
+          transact(ctx, (s): Result<null> => {
+            const now = clock.now();
+            const target = s.intentions.findById(input.intentionId);
+            if (!target) return err("NOT_FOUND", "Project not found");
+            if (target.status !== "active") return err("VALIDATION_ERROR", "Only an active project can be worked on");
+            const usable = loadFocusState(s, now, null).projects.find((p) => p.intention.id === target.id);
+            if (!usable?.selection.currentAction) {
+              return err(
+                "NEEDS_AI_REPLAN",
+                "Nothing in this project's order can be done now; ask the AI to rebuild it",
+              );
+            }
+            const running = s.work.findRunning();
+            if (running) {
+              const action = s.actions.findById(running.actionId);
+              const stage = action && s.stages.findById(action.stageId);
+              if (stage?.intentionId !== target.id) {
+                const stopped = stopInterval(s, running, now, "work.pause");
+                if (!stopped.ok) return stopped;
+              }
+            }
+            if (s.settings.selectedIntentionId() !== target.id) {
+              s.settings.setSelectedIntentionId(target.id);
+              s.recordChange({
+                commandType: "work.selectProject",
+                entityType: "intention",
+                entityId: target.id,
+                summary: "selected for work",
+              });
+            }
+            return ok(null);
+          }),
+        ),
+
+      /**
+       * Applies an owner-approved operational plan to ONE existing project (Stage 9, Day 1): the plan was
+       * designed outside the app with the owner and is applied deterministically, exactly as given — never an
+       * AI guess (no MCP path; owner/system only). The project keeps its id, status, desired result and Season
+       * link. The previous Stages are archived as history: finished Actions, work time and review evidence stay
+       * intact; unfinished Actions the plan does not carry over stay inactive, never deleted. Work running on
+       * the project pauses. Pending AI proposals about it go stale on their own (the route changed).
+       */
+      replaceProjectPlan: (ctx: CommandContext, input: ReplaceProjectPlanInput): Result<ProjectPlanReplacementDto> =>
+        authorize("plan.replace", ctx) ??
+        guarded("replaceProjectPlan", () =>
+          transact(ctx, (s): Result<ProjectPlanReplacementDto> => {
+            const computed = computePlanReplacement(s, input);
+            if (!computed.ok) return computed;
+            const { intention, before, outcome, fingerprint } = computed.value;
+            // Applied only against the exact dry run the owner saw (like a MODE B change of course).
+            if (input.expectedFingerprint !== fingerprint) {
+              return err(
+                "REQUIRES_CONFIRMATION",
+                "The project or the plan changed since the dry run the owner saw; run the dry run again",
+              );
+            }
+            const now = clock.now();
+            // Before archiving: the running Action's Stage must still be found to know it is this project's.
+            stopWorkInProject(s, intention.id, now);
+            s.stages.archive(outcome.archivedStageIds, now);
+            for (const stage of outcome.stages) s.stages.insert(stage);
+            for (const action of outcome.insertedActions) s.actions.insert(action);
+            const versionOf = new Map(before.actions.map((a) => [a.id, a.version]));
+            for (const action of outcome.movedActions) {
+              if (!s.actions.relocateIfVersion(action, versionOf.get(action.id) as number)) {
+                return err("CONFLICT_RELOAD", "Action changed concurrently; reload and retry");
+              }
+            }
+            const order = {
+              orderedActionIds: outcome.orderedActionIds,
+              rationale: input.rationale,
+              createdBy: ctx.actor,
+              sourceRevision: s.stateRevision(),
+            };
+            const existing = s.plans.findByIntention(intention.id);
+            if (existing) {
+              const next = replacePlanOrder(existing, order, now);
+              if (!next.ok) return err("VALIDATION_ERROR", next.reason);
+              if (!s.plans.updateIfVersion(next.value, existing.version)) {
+                return err("CONFLICT_RELOAD", "Plan changed concurrently; reload and retry");
+              }
+            } else {
+              const created = createPlan({ id: ids.next(), intentionId: intention.id, ...order, now });
+              if (!created.ok) return err("VALIDATION_ERROR", created.reason);
+              s.plans.insert(created.value);
+            }
+            s.recordChange({
+              commandType: "plan.replace",
+              entityType: "intention",
+              entityId: intention.id,
+              summary: `${outcome.stages.length} stages, ${outcome.orderedActionIds.length} open actions; archived ${outcome.archivedStageIds.length} stages, left behind ${outcome.leftBehindActionIds.length}`,
+            });
+            return ok(toPlanReplacementDto(intention, before, outcome, fingerprint));
+          }),
+        ),
+
+      /**
+       * «Быт» (Stage 9, Day 1): the owner writes down a one-off errand — directly, or by accepting the AI's
+       * suggestion for a «+» record (`sourceCaptureId`, provenance; the Capture itself is never changed).
+       */
+      addHouseholdItem: (ctx: CommandContext, input: AddHouseholdItemInput): Result<HouseholdItemDto> =>
+        authorize("household.add", ctx) ??
+        guarded("addHouseholdItem", () =>
+          transact(ctx, (s): Result<HouseholdItemDto> => {
+            const sourceCaptureId = input.sourceCaptureId ?? null;
+            if (sourceCaptureId) {
+              if (!s.captures.findById(sourceCaptureId)) return err("NOT_FOUND", "Capture not found");
+              if (s.household.listBySourceCaptures([sourceCaptureId]).length > 0) {
+                return err("CONFLICT_RELOAD", "This record is already in «Быт»; reload");
+              }
+            }
+            const created = createHouseholdItem({
+              id: ids.next(),
+              text: input.text,
+              sourceCaptureId,
+              now: clock.now(),
+            });
+            if (!created.ok) return err("VALIDATION_ERROR", created.reason);
+            s.household.insert(created.value);
+            s.recordChange({
+              commandType: "household.add",
+              entityType: "household",
+              entityId: created.value.id,
+              summary: sourceCaptureId ? "added from «+»" : "added",
+            });
+            return ok(toHouseholdItemDto(created.value));
+          }),
+        ),
+
+      /** «Сделано»: the errand leaves the active list and stays as minimal history. No timer, no work time. */
+      completeHouseholdItem: (ctx: CommandContext, input: CompleteHouseholdItemInput): Result<HouseholdItemDto> =>
+        authorize("household.complete", ctx) ??
+        guarded("completeHouseholdItem", () =>
+          transact(ctx, (s): Result<HouseholdItemDto> => {
+            const current = s.household.findById(input.id);
+            if (!current) return err("NOT_FOUND", "Household item not found");
+            const done = completeHouseholdItem(current, clock.now());
+            if (!done.ok) return err("CONFLICT_RELOAD", `${done.reason}; reload`);
+            if (!s.household.completeIfActive(done.value))
+              return err("CONFLICT_RELOAD", "Changed concurrently; reload");
+            s.recordChange({
+              commandType: "household.complete",
+              entityType: "household",
+              entityId: current.id,
+              summary: "done",
+            });
+            return ok(toHouseholdItemDto(done.value));
           }),
         ),
 

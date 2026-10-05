@@ -52,16 +52,18 @@ Then do the smallest right thing:
 - Something worth remembering (decision, fact, observation, preference/constraint, idea) → save_memory with the captureId. kind "memory".
 - A dated event or obligation → save_memory type "commitment" with the absolute date and time. You cannot write to the external calendar; say so briefly. kind "commitment".
 - A request to change the route or order, or news that makes the current order wrong (something is finished, «Сейчас» needs a replan) → if only the order of already-approved unfinished actions must change, reorder_existing_actions; otherwise create_route_proposal. The user reviews proposals in the app — never say a proposal is applied. kind "proposal", proposalId = the created proposal id (null after a reorder).
+- A clearly one-off everyday errand of personal life that is neither project work nor a dated calendar event («записаться к стоматологу», «забрать байк из ремонта», «позвонить маме») → kind "household" with householdText = the errand as one short line in the user's words. Do not save it as memory and do not turn it into an action. You only suggest it: the user decides whether it goes into «Быт» — never say it was added. When unsure (it may be project work, an idea, or a dated event), do NOT use household.
 - Nothing to do → kind "no_operation".
 One message may need several of these (e.g. remember and propose); report the kind that matters most.
 
-Rules: never invent facts; never claim a change you did not make; you cannot mark actions done or change the Season or «Чем ты не хочешь жертвовать ради целей?» — suggest those to the user in words. If a write returns CONFLICT_RELOAD, call get_living_map_context again and retry once. The reply is in Russian, 1–4 short sentences, warm and concrete, without IDs or technical terms. About the app, say only what is true: proposals appear at the top of the main screen for the user to confirm; manual editing (stages, actions, the current stage) is on the «Замысел» tab.
+Rules: never invent facts; never claim a change you did not make; you cannot mark actions done or change the Season or «Чем ты не хочешь жертвовать ради целей?» — suggest those to the user in words. If a write returns CONFLICT_RELOAD, call get_living_map_context again and retry once. The reply is in Russian, 1–4 short sentences, warm and concrete, without IDs or technical terms. About the app, say only what is true: proposals appear at the top of the main screen for the user to confirm; manual editing (stages, actions, the current stage) is on the «Проекты» tab. Call the user's projects «проекты» (never «замыслы»).
 
-Your final step is ALWAYS a call to the StructuredOutput tool with { kind, reply, proposalId } — never answer in plain text; plain text is discarded and the user sees nothing.`;
+Your final step is ALWAYS a call to the StructuredOutput tool with { kind, reply, proposalId, householdText } (householdText only for kind "household", otherwise null) — never answer in plain text; plain text is discarded and the user sees nothing.`;
 
 // Claude Code 2.1 silently drops the whole structured-output tool for a schema carrying `$schema` or `format`
 // (e.g. "uuid"); the UUID `pattern` stays, and the result is re-validated with Zod before anything is recorded.
-const RESULT_JSON_SCHEMA = JSON.stringify(z.toJSONSchema(CaptureAiResultSchema), (key, value) =>
+// `io: "input"`: what the AI must send (the schema normalises it afterwards; transforms have no JSON Schema form).
+const RESULT_JSON_SCHEMA = JSON.stringify(z.toJSONSchema(CaptureAiResultSchema, { io: "input" }), (key, value) =>
   key === "format" || key === "$schema" ? undefined : value,
 );
 

@@ -60,6 +60,63 @@ export function describeImpact(item: ImpactItemDto): string {
   }
 }
 
+/** A civil calendar day: what the owner calls «5 октября 2026». */
+export type CivilDay = { readonly year: number; readonly month: number; readonly day: number };
+
+const MONTHS_GENITIVE = [
+  "января",
+  "февраля",
+  "марта",
+  "апреля",
+  "мая",
+  "июня",
+  "июля",
+  "августа",
+  "сентября",
+  "октября",
+  "ноября",
+  "декабря",
+] as const;
+
+/** The civil day of `iso` in `timeZone`. Digits only from Intl (en-CA is fixed `YYYY-MM-DD`), never localized text. */
+export function civilDayOf(iso: string, timeZone: string): CivilDay {
+  const [year, month, day] = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  })
+    .format(new Date(iso))
+    .split("-")
+    .map(Number) as [number, number, number];
+  return { year, month, day };
+}
+
+const monthRu = (d: CivilDay) => MONTHS_GENITIVE[d.month - 1] as string;
+const yearRu = (d: CivilDay) => `${String(d.year % 100).padStart(2, "0")}г`;
+
+/** `5 октября 26г` (Stage 9, Day 1 — the owner's own format; never browser-locale output). */
+export function formatDayRu(d: CivilDay): string {
+  return `${d.day} ${monthRu(d)} ${yearRu(d)}`;
+}
+
+/**
+ * Inclusive range of days, as compact as stays unambiguous: `5–10 октября 26г`, `28 сентября – 4 октября 26г`,
+ * `29 декабря 26г – 4 января 27г`; one day is just `5 октября 26г`.
+ */
+export function formatDayRangeRu(from: CivilDay, to: CivilDay): string {
+  if (from.year !== to.year) return `${formatDayRu(from)} – ${formatDayRu(to)}`;
+  if (from.month !== to.month) return `${from.day} ${monthRu(from)} – ${to.day} ${monthRu(to)} ${yearRu(to)}`;
+  if (from.day !== to.day) return `${from.day}–${to.day} ${monthRu(to)} ${yearRu(to)}`;
+  return formatDayRu(from);
+}
+
+/** A Review's period in the owner's words. `periodEnd` is exclusive: the last day shown is the one it includes. */
+export function formatReviewPeriod(review: { periodStart: string; periodEnd: string; timeZone: string }): string {
+  const lastIncluded = new Date(new Date(review.periodEnd).getTime() - 1).toISOString();
+  return formatDayRangeRu(civilDayOf(review.periodStart, review.timeZone), civilDayOf(lastIncluded, review.timeZone));
+}
+
 export function formatDateRu(iso: string): string {
   return new Date(iso).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
 }

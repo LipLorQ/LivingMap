@@ -675,6 +675,7 @@ function ProjectCard({
   currentAction,
   run,
   onReorder,
+  onAskRebuild,
 }: {
   project: ProjectViewDto;
   index: number;
@@ -682,6 +683,7 @@ function ProjectCard({
   currentAction: CurrentViewDto["currentAction"];
   run: Run;
   onReorder: (orderedIds: string[]) => void;
+  onAskRebuild: (text: string) => void;
 }) {
   const { intention } = project;
   const [open, setOpen] = useState(false);
@@ -737,7 +739,15 @@ function ProjectCard({
       )}
       {isActive && project.needsAiReplan && (
         <p data-testid="map-project-needs-replan" className="text-sm text-amber-800">
-          В этом проекте нужен новый порядок действий.
+          В этом проекте нужен новый порядок действий.{" "}
+          <button
+            type="button"
+            data-testid="map-project-ask-ai"
+            className="rounded border border-violet-400 px-2 py-0.5 text-xs text-violet-800"
+            onClick={() => onAskRebuild(`Перестрой порядок действий проекта «${intention.title}».`)}
+          >
+            Попросить ИИ перестроить
+          </button>
         </p>
       )}
       <button type="button" data-testid="map-project-open" onClick={() => setOpen((v) => !v)}>
@@ -812,7 +822,15 @@ function ProjectCard({
   );
 }
 
-function ProjectsLevel({ view, run }: { view: CurrentViewDto; run: Run }) {
+function ProjectsLevel({
+  view,
+  run,
+  onAskRebuild,
+}: {
+  view: CurrentViewDto;
+  run: Run;
+  onAskRebuild: (text: string) => void;
+}) {
   const active = view.projects.filter((p) => p.intention.status === "active");
   const paused = view.projects.filter((p) => p.intention.status === "deferred");
   const full = view.projectSlots.active >= view.projectSlots.max;
@@ -831,7 +849,7 @@ function ProjectsLevel({ view, run }: { view: CurrentViewDto; run: Run }) {
       )}
       {view.projects.length === 0 ? (
         <p data-testid="projects-empty" className="text-neutral-500">
-          Пока нет проектов. Начни с вкладки «Замыслы».
+          Пока нет проектов. Начни с вкладки «Проекты».
         </p>
       ) : (
         <ul className="space-y-2">
@@ -844,6 +862,7 @@ function ProjectsLevel({ view, run }: { view: CurrentViewDto; run: Run }) {
               currentAction={view.currentAction}
               run={run}
               onReorder={(orderedIds) => run(window.livingMap.commands.reorderProjects({ orderedIds }))}
+              onAskRebuild={onAskRebuild}
             />
           ))}
           {paused.map((project) => (
@@ -855,6 +874,7 @@ function ProjectsLevel({ view, run }: { view: CurrentViewDto; run: Run }) {
               currentAction={view.currentAction}
               run={run}
               onReorder={() => {}}
+              onAskRebuild={onAskRebuild}
             />
           ))}
         </ul>
@@ -1118,7 +1138,7 @@ export function MapScreen({
       <Arrow />
       <SeasonLevel view={view} run={run} />
       <Arrow label="служит этой цели" />
-      <ProjectsLevel view={view} run={run} />
+      <ProjectsLevel view={view} run={run} onAskRebuild={onAskRebuild} />
       <Arrow label="сейчас в работе" />
       <NowLevel view={view} execution={execution} onOpenNow={onOpenNow} />
       <HistorySection history={history} />

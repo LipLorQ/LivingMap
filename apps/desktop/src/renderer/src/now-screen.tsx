@@ -236,6 +236,24 @@ export function ExecutionPanel({
   );
 }
 
+/**
+ * «Попросить ИИ перестроить» (Stage 6, restored on Stage 9 Day 1): opens `+` with a prefilled request about
+ * this project — never sent by itself; the AI answers through the usual Proposal / safe reorder. Since Stage 8 it
+ * was reachable only when NO project had work at all; it now sits with the project in front of the owner.
+ */
+function AskAiButton({ onClick, testId }: { onClick: () => void; testId: string }) {
+  return (
+    <button
+      type="button"
+      data-testid={testId}
+      className="rounded border border-violet-400 px-2 py-0.5 text-xs text-violet-800"
+      onClick={onClick}
+    >
+      Попросить ИИ перестроить
+    </button>
+  );
+}
+
 function CurrentActionCard({
   action,
   reason,
@@ -244,6 +262,7 @@ function CurrentActionCard({
   stageTitle,
   execution,
   handlers,
+  onAskReplan,
 }: {
   action: ActionDto | undefined;
   reason: WhyNowReasonDto;
@@ -252,6 +271,7 @@ function CurrentActionCard({
   stageTitle: string | undefined;
   execution: ExecutionDto;
   handlers: ExecutionHandlers;
+  onAskReplan: () => void;
 }) {
   if (!action) {
     // The plan referenced an id no longer in the current view — defensive, should not happen in practice.
@@ -284,11 +304,66 @@ function CurrentActionCard({
         </details>
       )}
       <ExecutionPanel action={action} execution={execution} handlers={handlers} />
+      <AskAiButton testId="now-ask-ai" onClick={onAskReplan} />
     </div>
   );
 }
 
-function NeedsAiReplan({ onAskReplan }: { onAskReplan: () => void }) {
+/**
+ * «Над каким проектом я сейчас работаю?» (Stage 9, Day 1). Lists the active projects; picking one makes
+ * `Сейчас` follow that project's own approved order. It never reorders projects or plans. Running work on
+ * another project is paused by the application — the owner then presses «Начать» herself.
+ */
+function ProjectSwitcher({
+  view,
+  focusId,
+  onSelect,
+}: {
+  view: CurrentViewDto;
+  focusId: string | undefined;
+  onSelect: (intentionId: string) => Promise<unknown>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const active = view.projects.filter((p) => p.intention.status === "active");
+  if (active.length < 2 || !focusId) return null;
+  return (
+    <div className="mb-2 space-y-1">
+      <label className="flex items-center gap-2 text-sm">
+        <span className="text-neutral-600">Проект:</span>
+        <select
+          data-testid="project-switcher"
+          className="rounded border bg-white px-2 py-0.5"
+          value={focusId}
+          disabled={busy}
+          onChange={async (e) => {
+            const id = e.target.value;
+            if (id === focusId) return;
+            setBusy(true);
+            try {
+              await onSelect(id);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {active.map((p) => (
+            <option key={p.intention.id} value={p.intention.id} disabled={p.needsAiReplan}>
+              {p.intention.title}
+              {p.needsAiReplan ? " — нужен новый порядок" : ""}
+            </option>
+          ))}
+        </select>
+      </label>
+      {view.execution.state === "running" && (
+        <p data-testid="project-switcher-hint" className="text-xs text-neutral-500">
+          Если переключиться, текущая работа встанет на паузу.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function NeedsAiReplan({ onAskReplan }: { onAskReplan: (projectTitle?: string) => void }) {
   return (
     <div data-testid="now-needs-replan" className="space-y-2 rounded border-2 border-amber-400 bg-amber-50 p-3">
       <p className="font-semibold">Текущий порядок больше не подходит к реальности.</p>
@@ -296,7 +371,7 @@ function NeedsAiReplan({ onAskReplan }: { onAskReplan: () => void }) {
         type="button"
         data-testid="ask-replan"
         className="rounded border border-violet-500 bg-violet-600 px-3 py-1 text-white"
-        onClick={onAskReplan}
+        onClick={() => onAskReplan()}
       >
         Попросить ИИ перестроить
       </button>
@@ -490,7 +565,15 @@ function DayRoutine({ kind, routines }: { kind: RoutineKind; routines: readonly 
 }
 
 /** Several active projects at a glance: who leads «Сейчас», who needs a new order, honest progress. */
-function ProjectsGlance({ view }: { view: CurrentViewDto }) {
+function ProjectsGlance({
+  view,
+  focusId,
+  onAskReplan,
+}: {
+  view: CurrentViewDto;
+  focusId: string | undefined;
+  onAskReplan: (projectTitle?: string) => void;
+}) {
   const active = view.projects.filter((p) => p.intention.status === "active");
   if (active.length < 2) return null;
   return (
@@ -498,10 +581,15 @@ function ProjectsGlance({ view }: { view: CurrentViewDto }) {
       <p className="mb-1 text-sm text-neutral-500">Проекты сезона</p>
       <ul className="space-y-1">
         {active.map((p) => (
-          <li key={p.intention.id} data-testid="now-project-row" data-focus={p.intention.id === view.intention?.id}>
-            <span className={p.intention.id === view.intention?.id ? "font-medium" : ""}>{p.intention.title}</span>
+          <li key={p.intention.id} data-testid="now-project-row" data-focus={p.intention.id === focusId}>
+            <span className={p.intention.id === focusId ? "font-medium" : ""}>{p.intention.title}</span>
             <span className="text-xs text-neutral-500"> · {formatProgress(p.progress)}</span>
-            {p.needsAiReplan && <span className="text-xs text-amber-800"> · нужен новый порядок</span>}
+            {p.needsAiReplan && (
+              <>
+                <span className="text-xs text-amber-800"> · нужен новый порядок </span>
+                <AskAiButton testId="now-project-ask-ai" onClick={() => onAskReplan(p.intention.title)} />
+              </>
+            )}
           </li>
         ))}
       </ul>
@@ -515,11 +603,14 @@ export function NowScreen({
   onRefreshCalendar,
   onDisconnectCalendar,
   onAskReplan,
+  onSelectProject,
   onOpenMap,
   execution,
 }: {
   view: CurrentViewDto;
-  onAskReplan: () => void;
+  /** Opens `+` with a prefilled request — for this project when one is named. Never sent by itself. */
+  onAskReplan: (projectTitle?: string) => void;
+  onSelectProject: (intentionId: string) => Promise<unknown>;
   onOpenMap: () => void;
   execution: ExecutionHandlers;
   onConnectCalendar: (icalUrl: string) => Promise<unknown>;
@@ -529,6 +620,7 @@ export function NowScreen({
   const [showOrder, setShowOrder] = useState(false);
   const actionsById = new Map(view.projects.flatMap((p) => p.stages.flatMap((s) => s.actions)).map((a) => [a.id, a]));
   const currentProject = view.projects.find((p) => p.intention.id === view.currentAction?.intentionId);
+  const focusId = view.currentAction?.intentionId ?? view.intention?.id;
 
   return (
     <div data-testid="now-screen" className="space-y-4">
@@ -537,8 +629,9 @@ export function NowScreen({
       <DayRoutine kind="morning" routines={view.routines} />
 
       <section className="rounded border-2 border-blue-300 bg-blue-50 p-3">
+        <ProjectSwitcher view={view} focusId={focusId} onSelect={onSelectProject} />
         {!view.intention ? (
-          <p data-testid="now-empty">Пока нет активного Замысла. Начни с вкладки «Замыслы».</p>
+          <p data-testid="now-empty">Пока нет активного проекта. Начни с вкладки «Проекты».</p>
         ) : view.needsAiReplan || !view.currentAction ? (
           <>
             <NeedsAiReplan onAskReplan={onAskReplan} />
@@ -557,11 +650,12 @@ export function NowScreen({
             stageTitle={currentProject?.stages.find((st) => st.id === view.currentAction?.stageId)?.title}
             execution={view.execution}
             handlers={execution}
+            onAskReplan={() => onAskReplan(currentProject?.intention.title)}
           />
         )}
       </section>
 
-      <ProjectsGlance view={view} />
+      <ProjectsGlance view={view} focusId={focusId} onAskReplan={onAskReplan} />
 
       <CalendarSection
         snapshot={view.calendarSnapshot}

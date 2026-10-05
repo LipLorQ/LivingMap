@@ -8,6 +8,7 @@ import type {
   ReviewWithFindingsDto,
 } from "@living-map/contracts";
 import { useCallback, useEffect, useState } from "react";
+import { formatReviewPeriod } from "./format";
 import { FAILURE_TEXT } from "./plus";
 
 function failureText(code: string | null): string {
@@ -43,14 +44,6 @@ const FINDING_STATUS_LABELS: Record<ReviewFindingDto["status"], string> = {
 function pluralize(n: number, one: string, few: string, many: string): string {
   if (n === 1) return one;
   return n >= 2 && n <= 4 ? few : many;
-}
-
-function formatPeriod(review: Pick<ReviewDto, "type" | "periodStart" | "periodEnd" | "timeZone">): string {
-  const fmt = (iso: string) => new Date(iso).toLocaleDateString("ru-RU", { timeZone: review.timeZone });
-  const start = fmt(review.periodStart);
-  // periodEnd is exclusive (the instant the next period starts) — show the last day actually included.
-  const end = fmt(new Date(new Date(review.periodEnd).getTime() - 1).toISOString());
-  return review.type === "daily" ? start : `${start} — ${end}`;
 }
 
 type Handlers = {
@@ -229,7 +222,7 @@ export function ReviewsPanel(handlers: Handlers) {
             className={`flex items-center justify-between gap-2 rounded border px-2 py-1 ${selected?.id === r.id ? "border-blue-400 bg-blue-50" : ""}`}
           >
             <button type="button" className="flex-1 text-left" onClick={() => void openReview(r.id)}>
-              <span className="font-medium">{TYPE_LABELS[r.type]}</span> · {formatPeriod(r)} ·{" "}
+              <span className="font-medium">{TYPE_LABELS[r.type]}</span> · {formatReviewPeriod(r)} ·{" "}
               <span data-testid="review-status">{STATUS_LABELS[r.status]}</span>
             </button>
             {r.status === "failed" && (
@@ -267,7 +260,7 @@ function ReviewDetail({
   return (
     <div data-testid="review-detail" className="space-y-2 rounded border p-3">
       <h3 className="font-semibold">
-        {TYPE_LABELS[review.type]} · {formatPeriod(review)}
+        {TYPE_LABELS[review.type]} · {formatReviewPeriod(review)}
       </h3>
       {review.status === "no_useful_change" && (
         <p data-testid="review-no-useful-change" className="text-neutral-500">

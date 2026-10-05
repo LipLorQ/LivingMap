@@ -25,20 +25,39 @@ export type AiFailure = z.infer<typeof AiFailureSchema>;
  * The AI's structured interpretation of one Capture (ADR-0007). Never free prose parsed by LivingMap:
  * the AI host must return exactly this, and it is validated again before anything is recorded.
  */
-export const CaptureAiResultSchema = z.strictObject({
-  kind: z
-    .enum(["answer", "memory", "commitment", "proposal", "no_operation"])
-    .describe(
-      "answer = you answered a question; memory = you saved something worth remembering; commitment = a dated obligation/event you saved as memory; proposal = you created a proposal or reordered actions; no_operation = nothing to do",
+export const CaptureAiResultSchema = z
+  .strictObject({
+    kind: z
+      .enum(["answer", "memory", "commitment", "proposal", "household", "no_operation"])
+      .describe(
+        "answer = you answered a question; memory = you saved something worth remembering; commitment = a dated obligation/event you saved as memory; proposal = you created a proposal or reordered actions; household = the message is clearly a one-off everyday errand (not project work, not a calendar event) — you suggest putting it into «Быт», the user decides; no_operation = nothing to do",
+      ),
+    reply: z
+      .string()
+      .trim()
+      .min(1)
+      .max(1500)
+      .describe("Short reply to the user in Russian (1-4 sentences). No IDs, no technical terms."),
+    proposalId: Id.nullable().describe(
+      "id returned by create_route_proposal / propose_desired_result_change, else null",
     ),
-  reply: z
-    .string()
-    .trim()
-    .min(1)
-    .max(1500)
-    .describe("Short reply to the user in Russian (1-4 sentences). No IDs, no technical terms."),
-  proposalId: Id.nullable().describe("id returned by create_route_proposal / propose_desired_result_change, else null"),
-});
+    householdText: z
+      .string()
+      .trim()
+      .min(1)
+      .max(300)
+      .nullable()
+      .optional()
+      .describe(
+        "Only for kind household: the errand as a short self-contained line in the user's words (e.g. «Записаться к стоматологу»); otherwise null",
+      ),
+  })
+  // A «Быт» suggestion always carries its text. A stray text on any other kind is dropped, not fatal: the
+  // JSON schema the AI host enforces cannot express this link, so a correct answer must not fail on it.
+  .refine((r) => r.kind !== "household" || Boolean(r.householdText), {
+    message: "householdText is required for kind household",
+  })
+  .transform(({ householdText, ...rest }) => (rest.kind === "household" ? { ...rest, householdText } : rest));
 export type CaptureAiResult = z.infer<typeof CaptureAiResultSchema>;
 
 export const MemoryTypeSchema = z.enum(["decision", "fact", "observation", "preference", "commitment", "idea", "note"]);
@@ -68,6 +87,8 @@ export const CaptureDtoSchema = z.object({
   proposalId: Id.nullable(),
   /** Memories the AI saved from this Capture. */
   memories: z.array(MemoryDtoSchema),
+  /** The «Быт» item the owner created from this Capture's suggestion, if any. */
+  householdItemId: Id.nullable(),
 });
 export type CaptureDto = z.infer<typeof CaptureDtoSchema>;
 

@@ -7,6 +7,7 @@ import type {
   DecadePlanItem,
   EntityId,
   GoodLifeCondition,
+  HouseholdItem,
   Instant,
   Intention,
   Memory,
@@ -143,6 +144,10 @@ export interface IntentionRepository extends IntentionReader {
   reorder(positions: ReadonlyMap<EntityId, number>, now: Instant): void;
 }
 
+/**
+ * Live Stages only: a Stage archived by an owner-approved plan replacement (Stage 9) is history — it is
+ * never returned here, so no command, order, `Сейчас` or proposal can reach it or its Actions again.
+ */
 export interface StageReader {
   findById(id: EntityId): Stage | undefined;
   listByIntention(intentionId: EntityId): Stage[];
@@ -159,6 +164,8 @@ export interface StageRepository extends StageReader {
    * selection, not a content edit, so it does not require an `expectedVersion` from the caller.
    */
   setCurrent(intentionId: EntityId, stageId: EntityId, now: Instant): void;
+  /** Takes these Stages out of the route (owner-approved plan replacement); rows and their Actions stay. */
+  archive(stageIds: readonly EntityId[], now: Instant): void;
 }
 
 export interface ActionReader {
@@ -173,6 +180,8 @@ export interface ActionReader {
 export interface ActionRepository extends ActionReader {
   insert(action: Action): void;
   updateIfVersion(action: Action, expectedVersion: Version): boolean;
+  /** Like updateIfVersion, and also moves the Action to `action.stageId`/`action.position` (plan replacement). */
+  relocateIfVersion(action: Action, expectedVersion: Version): boolean;
   reorder(positions: ReadonlyMap<EntityId, number>, now: Instant): void;
 }
 
@@ -215,10 +224,29 @@ export interface WorkIntervalRepository extends WorkIntervalReader {
 
 export interface SettingsReader {
   dailyWorkTargetMinutes(): number;
+  /** The project the owner chose to work on (may be stale — the read model checks it is still usable). */
+  selectedIntentionId(): EntityId | null;
 }
 
 export interface SettingsRepository extends SettingsReader {
   setDailyWorkTargetMinutes(minutes: number): void;
+  setSelectedIntentionId(id: EntityId | null): void;
+}
+
+/** «Быт» (Stage 9): small one-off errands, never project work. */
+export interface HouseholdReader {
+  findById(id: EntityId): HouseholdItem | undefined;
+  /** Oldest first — the order they were written down. */
+  listActive(): HouseholdItem[];
+  /** Newest first. */
+  listRecentlyDone(limit: number): HouseholdItem[];
+  listBySourceCaptures(captureIds: readonly EntityId[]): HouseholdItem[];
+}
+
+export interface HouseholdRepository extends HouseholdReader {
+  insert(item: HouseholdItem): void;
+  /** Persists only if the stored row is still active; false otherwise. */
+  completeIfActive(item: HouseholdItem): boolean;
 }
 
 export interface ProposalReader {
@@ -460,6 +488,7 @@ export interface ReadScope {
   calendar: CalendarSnapshotReader;
   work: WorkIntervalReader;
   settings: SettingsReader;
+  household: HouseholdReader;
   captures: CaptureReader;
   memories: MemoryReader;
   reviews: ReviewReader;
@@ -486,6 +515,7 @@ export interface WriteScope {
   calendar: CalendarSnapshotRepository;
   work: WorkIntervalRepository;
   settings: SettingsRepository;
+  household: HouseholdRepository;
   captures: CaptureRepository;
   memories: MemoryRepository;
   reviews: ReviewRepository;

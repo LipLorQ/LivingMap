@@ -14,6 +14,8 @@ import type {
   GoodLifeConditionRepository,
   HorizonReader,
   HorizonRepository,
+  HouseholdReader,
+  HouseholdRepository,
   IdGenerator,
   IntentionReader,
   IntentionRepository,
@@ -59,6 +61,8 @@ import {
   type CourseLevel,
   type DecadePlanItem,
   type GoodLifeCondition,
+  type HouseholdItem,
+  type HouseholdItemStatus,
   type Instant,
   type Intention,
   type IntentionStatus,
@@ -96,6 +100,7 @@ import {
   courseChanges,
   decadePlanItems,
   goodLifeConditions,
+  householdItems,
   intentions,
   memories,
   meta,
@@ -436,11 +441,29 @@ function intentionRepository(q: Tx): IntentionRepository {
   };
 }
 
+type StageRow = typeof stages.$inferSelect;
+const rowToStage = ({ archivedAt: _archived, ...stage }: StageRow): Stage => stage;
+// An archived Stage (owner-approved plan replacement) is history: never returned as part of a project.
+const live = isNull(stages.archivedAt);
+
 function stageReader(q: Tx): StageReader {
   return {
-    findById: (id) => q.select().from(stages).where(eq(stages.id, id)).get(),
+    findById: (id) => {
+      const row = q
+        .select()
+        .from(stages)
+        .where(and(eq(stages.id, id), live))
+        .get();
+      return row ? rowToStage(row) : undefined;
+    },
     listByIntention: (intentionId) =>
-      q.select().from(stages).where(eq(stages.intentionId, intentionId)).orderBy(asc(stages.position)).all(),
+      q
+        .select()
+        .from(stages)
+        .where(and(eq(stages.intentionId, intentionId), live))
+        .orderBy(asc(stages.position))
+        .all()
+        .map(rowToStage),
   };
 }
 
@@ -467,11 +490,20 @@ function stageRepository(q: Tx): StageRepository {
       // bump exactly where something changed (ARCHITECTURE Â§13) instead of a blind overwrite.
       q.update(stages)
         .set({ isCurrent: false, version: sql`${stages.version} + 1`, updatedAt: now })
-        .where(and(eq(stages.intentionId, intentionId), eq(stages.isCurrent, true), sql`${stages.id} != ${stageId}`))
+        .where(
+          and(eq(stages.intentionId, intentionId), eq(stages.isCurrent, true), sql`${stages.id} != ${stageId}`, live),
+        )
         .run();
       q.update(stages)
         .set({ isCurrent: true, version: sql`${stages.version} + 1`, updatedAt: now })
-        .where(and(eq(stages.id, stageId), eq(stages.isCurrent, false)))
+        .where(and(eq(stages.id, stageId), eq(stages.isCurrent, false), live))
+        .run();
+    },
+    archive: (stageIds, now) => {
+      if (stageIds.length === 0) return;
+      q.update(stages)
+        .set({ archivedAt: now, isCurrent: false, version: sql`${stages.version} + 1`, updatedAt: now })
+        .where(and(inArray(stages.id, stageIds as string[]), live))
         .run();
     },
   };
@@ -527,6 +559,23 @@ function actionRepository(q: Tx): ActionRepository {
             blockerReason: row.blockerReason,
             blockedAt: row.blockedAt,
             completedAt: row.completedAt,
+            version: row.version,
+            updatedAt: row.updatedAt,
+          })
+          .where(and(eq(actions.id, action.id), eq(actions.version, expectedVersion)))
+          .run().changes === 1
+      );
+    },
+    relocateIfVersion: (action, expectedVersion) => {
+      const row = actionToRow(action);
+      return (
+        q
+          .update(actions)
+          .set({
+            stageId: row.stageId,
+            position: row.position,
+            title: row.title,
+            doneWhen: row.doneWhen,
             version: row.version,
             updatedAt: row.updatedAt,
           })
@@ -694,12 +743,14 @@ function workRepository(q: Tx): WorkIntervalRepository {
 }
 
 function settingsReader(q: Tx): SettingsReader {
+  const row = () => {
+    const found = q.select().from(settings).where(eq(settings.id, 1)).get();
+    if (!found) throw new Error("settings row missing");
+    return found;
+  };
   return {
-    dailyWorkTargetMinutes: () => {
-      const row = q.select().from(settings).where(eq(settings.id, 1)).get();
-      if (!row) throw new Error("settings row missing");
-      return row.dailyWorkTargetMinutes;
-    },
+    dailyWorkTargetMinutes: () => row().dailyWorkTargetMinutes,
+    selectedIntentionId: () => row().selectedIntentionId,
   };
 }
 
@@ -708,6 +759,59 @@ function settingsRepository(q: Tx): SettingsRepository {
     ...settingsReader(q),
     setDailyWorkTargetMinutes: (minutes) =>
       void q.update(settings).set({ dailyWorkTargetMinutes: minutes }).where(eq(settings.id, 1)).run(),
+    setSelectedIntentionId: (id) =>
+      void q.update(settings).set({ selectedIntentionId: id }).where(eq(settings.id, 1)).run(),
+  };
+}
+
+type HouseholdRow = typeof householdItems.$inferSelect;
+const rowToHousehold = (row: HouseholdRow): HouseholdItem => ({ ...row, status: row.status as HouseholdItemStatus });
+
+function householdReader(q: Tx): HouseholdReader {
+  return {
+    findById: (id) => {
+      const row = q.select().from(householdItems).where(eq(householdItems.id, id)).get();
+      return row ? rowToHousehold(row) : undefined;
+    },
+    listActive: () =>
+      q
+        .select()
+        .from(householdItems)
+        .where(eq(householdItems.status, "active"))
+        .orderBy(asc(householdItems.createdAt), asc(sql`rowid`))
+        .all()
+        .map(rowToHousehold),
+    listRecentlyDone: (limit) =>
+      q
+        .select()
+        .from(householdItems)
+        .where(eq(householdItems.status, "done"))
+        .orderBy(desc(householdItems.completedAt), desc(sql`rowid`))
+        .limit(limit)
+        .all()
+        .map(rowToHousehold),
+    listBySourceCaptures: (captureIds) =>
+      captureIds.length === 0
+        ? []
+        : q
+            .select()
+            .from(householdItems)
+            .where(inArray(householdItems.sourceCaptureId, captureIds as string[]))
+            .all()
+            .map(rowToHousehold),
+  };
+}
+
+function householdRepository(q: Tx): HouseholdRepository {
+  return {
+    ...householdReader(q),
+    insert: (item) => void q.insert(householdItems).values(item).run(),
+    completeIfActive: (item) =>
+      q
+        .update(householdItems)
+        .set({ status: item.status, completedAt: item.completedAt, version: item.version })
+        .where(and(eq(householdItems.id, item.id), eq(householdItems.status, "active")))
+        .run().changes === 1,
   };
 }
 
@@ -1183,6 +1287,7 @@ export function createSqliteStore(handle: SqliteHandle, ids: IdGenerator): Store
             calendar: calendarSnapshotReader(tx),
             work: workReader(tx),
             settings: settingsReader(tx),
+            household: householdReader(tx),
             captures: captureReader(tx),
             memories: memoryReader(tx),
             reviews: reviewReader(tx),
@@ -1226,6 +1331,7 @@ export function createSqliteStore(handle: SqliteHandle, ids: IdGenerator): Store
             calendar: calendarSnapshotRepository(tx),
             work: workRepository(tx),
             settings: settingsRepository(tx),
+            household: householdRepository(tx),
             captures: captureRepository(tx),
             memories: memoryRepository(tx),
             reviews: reviewRepository(tx),

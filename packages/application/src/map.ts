@@ -69,6 +69,8 @@ export type FocusState = {
   readonly currentAction: CurrentActionDto | null;
   /** Active projects exist but nothing in any of their orders can be safely selected. */
   readonly needsAiReplan: boolean;
+  /** The owner's chosen work project when it is still usable (active, with an admissible Action), else null. */
+  readonly selectedProjectId: EntityId | null;
 };
 
 const OPEN = new Set(["active", "deferred"]);
@@ -84,10 +86,17 @@ export function openProjects(intentions: readonly Intention[]): Intention[] {
 /**
  * The single place that decides `Сейчас` across projects (ARCHITECTURE §26/§27). Each project's own
  * AI-maintained order is walked by the unchanged deterministic CurrentActionSelector; the only thing added
- * here is WHICH project is asked first — the owner's project order, with running work pinning its project.
- * Nothing is scored, reordered or invented: a project with nothing admissible is simply skipped.
+ * here is WHICH project is asked first: running work pins its project; otherwise the project the owner chose
+ * to work on (Stage 9, Day 1) when it is still usable; otherwise the owner's project order. Nothing is scored,
+ * reordered or invented: a project with nothing admissible is simply skipped, and an unusable choice (paused,
+ * finished, nothing admissible left) is ignored — deterministic fallback to the project order.
  */
-export function loadFocusState(s: ProjectScope, now: Instant, runningActionId: EntityId | null): FocusState {
+export function loadFocusState(
+  s: ProjectScope,
+  now: Instant,
+  runningActionId: EntityId | null,
+  selectedIntentionId: EntityId | null = null,
+): FocusState {
   const calendar: CalendarSnapshotDto = s.calendar.get();
   const projects = openProjects(s.intentions.list()).map((intention): ProjectState => {
     const stages = s.stages.listByIntention(intention.id);
@@ -103,9 +112,18 @@ export function loadFocusState(s: ProjectScope, now: Instant, runningActionId: E
   const pinned = runningActionId
     ? active.find((p) => p.actions.some((a) => a.id === runningActionId && a.status === "open"))
     : undefined;
-  const focus = pinned ?? active.find((p) => p.selection.currentAction !== null) ?? active[0];
+  const selected = selectedIntentionId
+    ? active.find((p) => p.intention.id === selectedIntentionId && p.selection.currentAction !== null)
+    : undefined;
+  const focus = pinned ?? selected ?? active.find((p) => p.selection.currentAction !== null) ?? active[0];
   const currentAction = focus?.selection.currentAction ?? null;
-  return { projects, focus, currentAction, needsAiReplan: active.length > 0 && currentAction === null };
+  return {
+    projects,
+    focus,
+    currentAction,
+    needsAiReplan: active.length > 0 && currentAction === null,
+    selectedProjectId: selected && focus === selected ? selected.intention.id : null,
+  };
 }
 
 export function toProjectViewDto(state: ProjectState): ProjectViewDto {

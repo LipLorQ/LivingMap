@@ -55,6 +55,15 @@ export const COMMAND_POLICY = {
   "work.pause": ["user-ui", "system"],
   "work.recover": ["system"],
   "settings.dailyWorkTarget": ["user-ui", "system"],
+  // Stage 9, Day 1: which active project `Сейчас` works on is the owner's choice of the moment, not strategy —
+  // and the AI never controls execution.
+  "work.selectProject": ["user-ui", "system"],
+  // Stage 9, Day 1: an owner-approved plan replaces a project's structure. Deliberately absent for mcp-ai: an
+  // AI-made plan never becomes canonical just because the AI produced it (it goes through create_route_proposal).
+  "plan.replace": ["user-ui", "system"],
+  // «Быт»: the owner's own pocket of errands. The AI may only SUGGEST one in its «+» reply; the owner adds it.
+  "household.add": ["user-ui", "system"],
+  "household.complete": ["user-ui", "system"],
   // Universal `+` (Stage 6, ADR-0007): the user saves raw text; only the desktop's own processor
   // (system) moves it through AI processing. mcp-ai can read Captures, never create or resolve them.
   "capture.create": ["user-ui", "system"],

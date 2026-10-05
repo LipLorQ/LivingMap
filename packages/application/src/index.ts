@@ -30,6 +30,8 @@ export type {
   GoodLifeConditionRepository,
   HorizonReader,
   HorizonRepository,
+  HouseholdReader,
+  HouseholdRepository,
   IdGenerator,
   IntentionReader,
   IntentionRepository,

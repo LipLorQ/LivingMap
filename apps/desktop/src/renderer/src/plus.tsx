@@ -12,14 +12,55 @@ export const FAILURE_TEXT: Record<AiFailure, string> = {
   failed: "ИИ не справился с разбором.",
 };
 
+/** The AI only suggests «Быт» for a clear one-off errand; the owner decides with one click (Stage 9, Day 1). */
+function HouseholdSuggestion({
+  capture,
+  onAddHousehold,
+}: {
+  capture: CaptureDto;
+  onAddHousehold: (captureId: string, text: string) => Promise<unknown>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const result = capture.result;
+  const text = result?.kind === "household" && "householdText" in result ? result.householdText : null;
+  if (!text) return null;
+  if (capture.householdItemId) {
+    return (
+      <p data-testid="capture-household-added" className="text-xs text-neutral-600">
+        В «Быте»: {text}
+      </p>
+    );
+  }
+  return (
+    <button
+      type="button"
+      data-testid="capture-household-add"
+      className="rounded border border-violet-400 px-2 py-0.5 text-xs disabled:opacity-50"
+      disabled={busy}
+      onClick={async () => {
+        setBusy(true);
+        try {
+          await onAddHousehold(capture.id, text);
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      Добавить в «Быт»: {text}
+    </button>
+  );
+}
+
 function CaptureStatus({
   capture,
   pendingProposalIds,
   onRetry,
+  onAddHousehold,
 }: {
   capture: CaptureDto;
   pendingProposalIds: ReadonlySet<string>;
   onRetry: (id: string) => Promise<unknown>;
+  onAddHousehold: (captureId: string, text: string) => Promise<unknown>;
 }) {
   if (capture.state === "pending") return <p className="text-xs text-neutral-500">Сохранено · ждёт ИИ</p>;
   if (capture.state === "processing") return <p className="text-xs text-violet-700">ИИ разбирает…</p>;
@@ -52,6 +93,7 @@ function CaptureStatus({
           Запомнила: {m.text}
         </p>
       ))}
+      <HouseholdSuggestion capture={capture} onAddHousehold={onAddHousehold} />
       {proposalId && pendingProposalIds.has(proposalId) && (
         <p data-testid="capture-proposal" className="text-xs font-medium text-blue-800">
           Предложение ИИ ждёт твоего решения — оно вверху экрана.
@@ -70,6 +112,7 @@ export function PlusPanel({
   pendingProposalIds,
   onSubmit,
   onRetry,
+  onAddHousehold,
 }: {
   draft: string;
   onDraftChange: (text: string) => void;
@@ -78,6 +121,7 @@ export function PlusPanel({
   pendingProposalIds: ReadonlySet<string>;
   onSubmit: (rawText: string) => Promise<{ ok: boolean }>;
   onRetry: (id: string) => Promise<unknown>;
+  onAddHousehold: (captureId: string, text: string) => Promise<unknown>;
 }) {
   const [busy, setBusy] = useState(false);
   const sending = useRef(false);
@@ -130,7 +174,12 @@ export function PlusPanel({
           {captures.map((c) => (
             <li key={c.id} data-testid="capture" data-state={c.state} className="space-y-1">
               <p className="line-clamp-3 whitespace-pre-wrap text-neutral-500">{c.rawText}</p>
-              <CaptureStatus capture={c} pendingProposalIds={pendingProposalIds} onRetry={onRetry} />
+              <CaptureStatus
+                capture={c}
+                pendingProposalIds={pendingProposalIds}
+                onRetry={onRetry}
+                onAddHousehold={onAddHousehold}
+              />
             </li>
           ))}
         </ul>

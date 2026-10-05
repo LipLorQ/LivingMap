@@ -84,7 +84,7 @@ describe("migration 0017 from the real schema v17", () => {
     legacyV17(false);
     const h = track(openDesktopDatabase(file));
     expect(h.sqlite.pragma("user_version", { simple: true })).toBe(EXPECTED_SCHEMA_VERSION);
-    expect(EXPECTED_SCHEMA_VERSION).toBe(19); // 0017 (Stage 8), then 0018 (Stage 9 period labels)
+    expect(EXPECTED_SCHEMA_VERSION).toBe(20); // 0017 (Stage 8), 0018 (Stage 9 period labels), 0019 (Stage 9 Day 1)
     expect(readdirSync(backupsDir(home)).some((f) => f.includes("schema-v17"))).toBe(true);
     expect(h.sqlite.pragma("integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(h.sqlite.pragma("foreign_key_check")).toEqual([]);
@@ -486,7 +486,7 @@ describe("migration 0018 from the real schema v18 (Stage 9 period labels)", () =
     legacy.close();
 
     const h = track(openDesktopDatabase(file));
-    expect(h.sqlite.pragma("user_version", { simple: true })).toBe(19);
+    expect(h.sqlite.pragma("user_version", { simple: true })).toBe(EXPECTED_SCHEMA_VERSION);
     expect(readdirSync(backupsDir(home)).some((f) => f.includes("schema-v18"))).toBe(true);
     expect(h.sqlite.pragma("integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(h.sqlite.pragma("foreign_key_check")).toEqual([]);

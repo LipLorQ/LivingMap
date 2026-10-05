@@ -3,11 +3,13 @@ import {
   AcceptReviewFindingInputSchema,
   AddActionInputSchema,
   AddGoodLifeConditionInputSchema,
+  AddHouseholdItemInputSchema,
   AddRoutineItemInputSchema,
   AddStageInputSchema,
   BlockActionInputSchema,
   ChangeIntentionStatusInputSchema,
   CompleteActionInputSchema,
+  CompleteHouseholdItemInputSchema,
   ConfirmPatternInputSchema,
   ConnectCalendarInputSchema,
   CorrectReviewFindingInputSchema,
@@ -45,6 +47,7 @@ import {
   RetryReviewInputSchema,
   SaveStrategyInputSchema,
   SearchMemoryInputSchema,
+  SelectWorkProjectInputSchema,
   SetCurrentStageInputSchema,
   SetDailyWorkTargetInputSchema,
   SubmitCaptureInputSchema,
@@ -178,6 +181,19 @@ export function registerIpcHandlers(
   handle(IPC_CHANNELS.pauseWork, WorkActionInputSchema, (input) => app.commands.pauseWork(ui(), input));
   handle(IPC_CHANNELS.setDailyWorkTarget, SetDailyWorkTargetInputSchema, (input) =>
     app.commands.setDailyWorkTarget(ui(), input),
+  );
+  // Stage 9, Day 1: which active project `Сейчас` works on — the owner's choice; pauses, never starts, work.
+  handle(IPC_CHANNELS.selectWorkProject, SelectWorkProjectInputSchema, (input) =>
+    app.commands.selectWorkProject(ui(), input),
+  );
+
+  // «Быт» (Stage 9, Day 1): the owner's pocket of everyday errands. Desktop only — never reachable from MCP.
+  handle(IPC_CHANNELS.listHouseholdItems, null, () => app.queries.listHouseholdItems());
+  handle(IPC_CHANNELS.addHouseholdItem, AddHouseholdItemInputSchema, (input) =>
+    app.commands.addHouseholdItem(ui(), input),
+  );
+  handle(IPC_CHANNELS.completeHouseholdItem, CompleteHouseholdItemInputSchema, (input) =>
+    app.commands.completeHouseholdItem(ui(), input),
   );
 
   // Universal `+` (ADR-0007): the Capture is committed first; only then may the AI processor pick it up.

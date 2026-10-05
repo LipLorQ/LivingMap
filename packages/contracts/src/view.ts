@@ -84,6 +84,11 @@ export const CurrentViewDtoSchema = z.object({
   /** Stable daily routines (not work, not part of any order). Desktop only — not part of the AI planning context. */
   routines: z.array(RoutineItemDtoSchema),
   pendingProposals: z.array(ProposalDtoSchema),
+  /**
+   * The project the owner picked to work on (Stage 9, Day 1), when that choice is still usable — active and
+   * with an admissible Action. null = no usable choice: `Сейчас` follows the owner's project order.
+   */
+  selectedProjectId: z.uuid().nullable(),
   /** null while there is no active Intention yet — a distinct state from `needsAiReplan`. */
   currentAction: CurrentActionDtoSchema.nullable(),
   /** True when active projects exist but no Action in any of them can be safely selected as `Сейчас`. */

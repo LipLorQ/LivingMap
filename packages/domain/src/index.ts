@@ -18,6 +18,8 @@ export type { CurrentActionSelection, SelectableAction, WhyNowReason } from "./c
 export { selectCurrentAction } from "./current-action";
 export type { GoodLifeCondition } from "./good-life-condition";
 export { CONDITION_TEXT_MAX, createGoodLifeCondition, editGoodLifeCondition } from "./good-life-condition";
+export type { HouseholdItem, HouseholdItemStatus } from "./household";
+export { completeHouseholdItem, createHouseholdItem, HOUSEHOLD_TEXT_MAX } from "./household";
 export type { Intention, IntentionStatus, IntentionStatusChange } from "./intention";
 export {
   activeIntentions,
@@ -46,6 +48,8 @@ export {
 } from "./pattern";
 export type { OrderedActionPlan } from "./plan";
 export { createPlan, PLAN_RATIONALE_MAX, replacePlanOrder, unplannedActionIds, validateActionOrder } from "./plan";
+export type { ApprovedPlanAction, ApprovedPlanStage, PlanReplacement } from "./plan-replacement";
+export { APPROVED_PLAN_MAX_ACTIONS, APPROVED_PLAN_MAX_STAGES, replaceProjectPlan } from "./plan-replacement";
 export type { Proposal, ProposalKind, ProposalStatus } from "./proposal";
 export {
   createProposal,

@@ -5,7 +5,8 @@ import type { Clock, IdGenerator } from "./ports";
 export type Actor = "user-ui" | "mcp-ai" | "system";
 
 /** Entry point the command came through. Application logic never branches on it. */
-export type CommandSource = "ipc" | "mcp" | "test";
+/** `cli`: an owner-run local tool (e.g. applying an owner-approved project plan, Stage 9). */
+export type CommandSource = "ipc" | "mcp" | "test" | "cli";
 
 export type CommandContext = {
   readonly actor: Actor;

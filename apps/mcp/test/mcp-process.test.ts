@@ -84,7 +84,7 @@ describe("MCP surface", () => {
     ).toEqual(["reorder_existing_actions", "save_memory"]);
     for (const n of names) {
       expect(n).not.toMatch(
-        /sql|exec|raw|shell|file|migrat|delete|policy|forget|accept|approve|confirm|reject|season|condition/i,
+        /sql|exec|raw|shell|file|migrat|delete|policy|forget|accept|approve|confirm|reject|season|condition|household|replace|select_work/i,
       );
     }
 

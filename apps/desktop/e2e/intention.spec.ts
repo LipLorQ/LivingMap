@@ -52,7 +52,7 @@ test("Stage 2: one real Intention through the actual UI, surviving a restart", a
     api: ["commands", "events", "queries"],
   });
 
-  // Stage 4: manual editing moved behind the "Замысел" tab; "Сейчас" is the default screen.
+  // Stage 4: manual editing moved behind the «Проекты» tab; "Сейчас" is the default screen.
   await win.getByTestId("nav-editor").click();
 
   // 2. Season.

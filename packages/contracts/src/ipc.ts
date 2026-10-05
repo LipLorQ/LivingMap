@@ -4,6 +4,7 @@ import type {
   ActionDto,
   AddActionInput,
   AddGoodLifeConditionInput,
+  AddHouseholdItemInput,
   AddRoutineItemInput,
   AddStageInput,
   BlockActionInput,
@@ -12,6 +13,7 @@ import type {
   ChangeIntentionStatusInput,
   ChangeLogEntryDto,
   CompleteActionInput,
+  CompleteHouseholdItemInput,
   ConfirmPatternInput,
   ConnectCalendarInput,
   CorrectReviewFindingInput,
@@ -28,6 +30,8 @@ import type {
   ForgetMemoryInput,
   GetReviewInput,
   GoodLifeConditionDto,
+  HouseholdItemDto,
+  HouseholdListDto,
   IntentionDto,
   ListCapturesInput,
   ListChangeHistoryInput,
@@ -62,6 +66,7 @@ import type {
   SaveStrategyInput,
   SearchMemoryInput,
   SeasonDto,
+  SelectWorkProjectInput,
   SetCurrentStageInput,
   SetDailyWorkTargetInput,
   StageDto,
@@ -133,6 +138,10 @@ export const IPC_CHANNELS = {
   editRoutineItem: "lm:command:editRoutineItem",
   removeRoutineItem: "lm:command:removeRoutineItem",
   reorderRoutineItems: "lm:command:reorderRoutineItems",
+  selectWorkProject: "lm:command:selectWorkProject",
+  listHouseholdItems: "lm:query:listHouseholdItems",
+  addHouseholdItem: "lm:command:addHouseholdItem",
+  completeHouseholdItem: "lm:command:completeHouseholdItem",
   stateChanged: "lm:event:stateChanged",
 } as const;
 
@@ -152,6 +161,8 @@ export type LivingMapApi = {
     getStrategyHistory(): Promise<Result<StrategyHistoryDto>>;
     /** What a change of course at this level may affect — to be shown BEFORE the change is confirmed. */
     previewCourseImpact(input: PreviewCourseImpactInput): Promise<Result<CourseImpactDto>>;
+    /** «Быт»: active errands and the most recently done ones. Desktop only — never in the AI context. */
+    listHouseholdItems(): Promise<Result<HouseholdListDto>>;
   };
   commands: {
     createSeason(input: CreateSeasonInput): Promise<Result<SeasonDto>>;
@@ -213,6 +224,10 @@ export type LivingMapApi = {
     editRoutineItem(input: EditRoutineItemInput): Promise<Result<RoutineItemDto>>;
     removeRoutineItem(input: RemoveRoutineItemInput): Promise<Result<null>>;
     reorderRoutineItems(input: ReorderRoutineItemsInput): Promise<Result<RoutineItemDto[]>>;
+    /** Which active project `Сейчас` works on. Pauses running work on another project; never starts any. */
+    selectWorkProject(input: SelectWorkProjectInput): Promise<Result<null>>;
+    addHouseholdItem(input: AddHouseholdItemInput): Promise<Result<HouseholdItemDto>>;
+    completeHouseholdItem(input: CompleteHouseholdItemInput): Promise<Result<HouseholdItemDto>>;
   };
   events: {
     /** Returns an unsubscribe function. */

@@ -16,6 +16,7 @@ const api: LivingMapApi = {
     listPlanningRules: (input) => ipcRenderer.invoke(IPC_CHANNELS.listPlanningRules, input),
     getStrategyHistory: () => ipcRenderer.invoke(IPC_CHANNELS.getStrategyHistory),
     previewCourseImpact: (input) => ipcRenderer.invoke(IPC_CHANNELS.previewCourseImpact, input),
+    listHouseholdItems: () => ipcRenderer.invoke(IPC_CHANNELS.listHouseholdItems),
   },
   commands: {
     createSeason: (input) => ipcRenderer.invoke(IPC_CHANNELS.createSeason, input),
@@ -64,6 +65,9 @@ const api: LivingMapApi = {
     editRoutineItem: (input) => ipcRenderer.invoke(IPC_CHANNELS.editRoutineItem, input),
     removeRoutineItem: (input) => ipcRenderer.invoke(IPC_CHANNELS.removeRoutineItem, input),
     reorderRoutineItems: (input) => ipcRenderer.invoke(IPC_CHANNELS.reorderRoutineItems, input),
+    selectWorkProject: (input) => ipcRenderer.invoke(IPC_CHANNELS.selectWorkProject, input),
+    addHouseholdItem: (input) => ipcRenderer.invoke(IPC_CHANNELS.addHouseholdItem, input),
+    completeHouseholdItem: (input) => ipcRenderer.invoke(IPC_CHANNELS.completeHouseholdItem, input),
   },
   events: {
     onStateChanged: (listener) => {

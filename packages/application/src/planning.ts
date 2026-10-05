@@ -35,7 +35,7 @@ export const PLANNING_MEANINGS: Record<string, string> = {
   goodLifeConditions:
     "«Чем ты не хочешь жертвовать ради целей?» — things the user refuses to sacrifice for their goals (sleep, health, relationships, free time…). These are hard strategic constraints: every route and every order must respect them. They are NOT optional motivational notes.",
   intention:
-    "«Замысел» — a project: one real, significant thing the user wants to bring into their life. At most THREE are active in the Season at once (usually one or two); status: active, deferred (paused), completed, released. `projects` lists the active ones in their order, then paused ones, each with its own Stages, Actions, order and honest progress; `intention`/`stages`/`orderedActionPlan` describe the FOCUS project — the one that owns «Сейчас». Always pass the intentionId of the project you mean. You cannot activate, pause, complete or release a project: that is the user's decision.",
+    "«Проект» (the user-facing word; internally Intention) — one real, significant thing the user wants to bring into their life. At most THREE are active in the Season at once (usually one or two); status: active, deferred (paused), completed, released. `projects` lists the active ones in their order, then paused ones, each with its own Stages, Actions, order and honest progress; `intention`/`stages`/`orderedActionPlan` describe the FOCUS project — the one that owns «Сейчас». Always pass the intentionId of the project you mean. You cannot activate, pause, complete or release a project: that is the user's decision.",
   strategy:
     "One life, one causal line, no categories: the sparse plan by decades (strategy.decadePlan, a few words each) → the next 3 years (strategy.horizon) → this year (strategy.year) → this Season (season.focus is its ONE main goal) → the active projects → the current Stage → the current Action («Сейчас»). Far = coarse, near = detailed. Every layer carries one short «whyItMatters» sentence saying why it serves the layer above. Use the whole line to understand WHY the user does what they do, and propose routes that serve it. You can read all of it but change none of it: the decades, the 3-year horizon, the year and the Season goal belong to the user alone. If strategy.openCourseChanges is not empty the user has just changed course and the projects listed in its impact may no longer fit: propose a rebuilt route for them (create_route_proposal) — never act as if the old direction still stood. Progress is only ever a count of explicit things (projects[].progress, strategy.seasonProgress) and evidence is only recorded facts: never invent percentages.",
   desiredResult:
@@ -100,6 +100,18 @@ export function contextFingerprint(s: PlanningScope, intentionId: EntityId): str
     ...(plan ? [plan] : []),
     ...s.courseChanges.listAll().map((c) => ({ id: c.id, version: 1 })),
   ]);
+}
+
+/** Short, stable, platform-free digest (two FNV-1a 32-bit passes) — something an owner can copy from a dry run. */
+export function shortDigest(text: string): string {
+  let a = 0x811c9dc5;
+  let b = 0x01000193 ^ 0x5bd1e995;
+  for (let i = 0; i < text.length; i += 1) {
+    const c = text.charCodeAt(i);
+    a = Math.imul(a ^ c, 0x01000193) >>> 0;
+    b = Math.imul(b ^ c, 0x01000193 + 2) >>> 0;
+  }
+  return a.toString(16).padStart(8, "0") + b.toString(16).padStart(8, "0");
 }
 
 export const toPlanDto = (plan: OrderedActionPlan): OrderedActionPlanDto => ({
