@@ -165,7 +165,7 @@ export function App() {
             className={tab === "reviews" ? "font-semibold underline" : ""}
             onClick={() => setTab("reviews")}
           >
-            Разборы
+            Анализ
             {(view.reviewInbox.readyReviews > 0 || view.reviewInbox.patternCandidates > 0) && (
               <span data-testid="reviews-badge" className="ml-1 rounded-full bg-violet-600 px-1.5 text-xs text-white">
                 {view.reviewInbox.readyReviews + view.reviewInbox.patternCandidates}
@@ -234,8 +234,14 @@ export function App() {
                 : "Перестрой текущий порядок действий.",
             )
           }
+          onAskHelp={(projectTitle, stageTitle) =>
+            askAi(
+              `В проекте «${projectTitle}» в текущем этапе «${stageTitle}» нет следующего действия. Помоги предложить его.`,
+            )
+          }
           onSelectProject={(intentionId) => run(window.livingMap.commands.selectWorkProject({ intentionId }))}
           onOpenMap={() => setTab("map")}
+          onOpenProjects={() => setTab("editor")}
           execution={executionHandlers}
         />
       ) : tab === "map" ? (
@@ -388,7 +394,7 @@ const HISTORY_LABELS: Record<string, string> = {
   "action.block": "Действие заблокировано",
   "action.unblock": "Действие снова доступно",
   "action.reopen": "Действие возвращено в работу",
-  "action.reorder": "Изменён порядок показа действий в этапе",
+  "action.reorder": "Изменён порядок действий в этапе",
   "proposal.reject": "Отклонено предложение ИИ",
   "proposal.stale": "Предложение ИИ устарело",
   "plan.reorder": "ИИ изменил порядок действий",
@@ -406,9 +412,9 @@ const HISTORY_LABELS: Record<string, string> = {
   "capture.processed": "ИИ разобрал запись «+»",
   "memory.save": "ИИ сохранил в память",
   "memory.forget": "Удалено из памяти",
-  "review.due": "Готов новый разбор",
+  "review.due": "Готов новый анализ",
   "review.processed": "ИИ разобрал период",
-  "review.retry": "Разбор снова ждёт ИИ",
+  "review.retry": "Анализ снова ждёт ИИ",
   "review.findingCreated": "ИИ нашёл, что учесть",
   "reviewFinding.accept": "Находка подтверждена",
   "reviewFinding.correct": "Находка исправлена",
@@ -613,7 +619,6 @@ type IntentionSectionProps = ProjectHandlers & {
   intention: IntentionDto | null;
   stages: StageWithActionsDto[];
   plan: OrderedActionPlanDto | null;
-  unplannedActionIds: string[];
 };
 
 /** Every project of the Season (up to three active) with its own route, then the form for a new one. */
@@ -631,7 +636,6 @@ function ProjectsSection({
           intention={project.intention}
           stages={project.stages}
           plan={project.orderedActionPlan}
-          unplannedActionIds={project.unplannedActionIds}
         />
       ))}
       <CreateIntentionForm onCreate={handlers.onCreateIntention} full={slots.active >= slots.max} />
@@ -679,7 +683,7 @@ function IntentionEditor(props: IntentionSectionProps & { intention: IntentionDt
       )}
 
       <StagesSection {...props} />
-      <PlanSection plan={props.plan} stages={props.stages} unplannedActionIds={props.unplannedActionIds} />
+      <PlanSection plan={props.plan} stages={props.stages} />
     </section>
   );
 }
@@ -787,20 +791,23 @@ function ActionsSection({
 > & { stage: StageWithActionsDto }) {
   const [newTitle, setNewTitle] = useState("");
   const [newDoneWhen, setNewDoneWhen] = useState("");
+  // Finished Actions stay on top (history); the arrows move the unfinished ones — the REAL execution order.
+  const doneIds = stage.actions.filter((a) => a.status === "done").map((a) => a.id);
+  const unfinished = stage.actions.filter((a) => a.status !== "done");
   return (
     <div data-testid="actions" className="space-y-2 pl-4">
-      {stage.actions.map((action, i) => (
+      {stage.actions.map((action) => (
         <ActionRow
           key={action.id}
           action={action}
-          actions={stage.actions}
-          index={i}
+          actions={unfinished}
+          index={unfinished.indexOf(action)}
           onEditAction={onEditAction}
           onCompleteAction={onCompleteAction}
           onBlockAction={onBlockAction}
           onUnblockAction={onUnblockAction}
           onReopenAction={onReopenAction}
-          onReorderActions={(ids) => onReorderActions(stage.id, ids)}
+          onReorderActions={(ids) => onReorderActions(stage.id, [...doneIds, ...ids])}
         />
       ))}
       <div className="flex gap-2">
@@ -864,7 +871,7 @@ function ActionRow({
           value={action.title}
           onSave={(title) => onEditAction(action.id, action.version, title, action.doneWhen)}
         />
-        <ReorderButtons items={actions} index={index} onReorder={onReorderActions} />
+        {action.status !== "done" && <ReorderButtons items={actions} index={index} onReorder={onReorderActions} />}
         <span data-testid="action-status">{translateActionStatus(action.status)}</span>
       </div>
       <EditableText

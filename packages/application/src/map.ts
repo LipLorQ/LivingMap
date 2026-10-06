@@ -23,6 +23,7 @@ import {
   currentYearOf,
   decadesServedBy,
   type EntityId,
+  effectiveActionOrder,
   evidenceForYears,
   evidenceSince,
   type ImpactItem,
@@ -31,6 +32,7 @@ import {
   impactFingerprint,
   MAX_STRATEGY_YEAR,
   type OrderedActionPlan,
+  orderStageActions,
   type ProjectSnapshot,
   projectProgress,
   type RoutineItem,
@@ -40,7 +42,7 @@ import {
   seasonProgress,
   unplannedActionIds,
 } from "@living-map/domain";
-import { computeCurrentAction, toPlanDto } from "./planning";
+import { computeCurrentAction, type ProjectSelection, toPlanDto } from "./planning";
 import type { ReadScope } from "./ports";
 
 export const toSeasonDto = (season: Season): SeasonDto => ({ ...season });
@@ -58,7 +60,7 @@ export type ProjectState = {
   readonly stages: Stage[];
   readonly actions: Action[];
   readonly plan: OrderedActionPlan | undefined;
-  readonly selection: { currentAction: CurrentActionDto | null; needsAiReplan: boolean };
+  readonly selection: ProjectSelection;
 };
 
 export type FocusState = {
@@ -69,7 +71,9 @@ export type FocusState = {
   readonly currentAction: CurrentActionDto | null;
   /** Active projects exist but nothing in any of their orders can be safely selected. */
   readonly needsAiReplan: boolean;
-  /** The owner's chosen work project when it is still usable (active, with an admissible Action), else null. */
+  /** The focus project's own current Stage holds no usable Action (the owner chose it; nothing is shown instead). */
+  readonly emptyCurrentStage: { readonly intentionId: EntityId; readonly stageId: EntityId } | null;
+  /** The owner's chosen work project when it is still usable (active, with an admissible Action or a chosen Stage), else null. */
   readonly selectedProjectId: EntityId | null;
 };
 
@@ -104,8 +108,8 @@ export function loadFocusState(
     const plan = s.plans.findByIntention(intention.id);
     const selection =
       intention.status === "active"
-        ? computeCurrentAction(intention, actions, plan, calendar, now, runningActionId)
-        : { currentAction: null, needsAiReplan: false };
+        ? computeCurrentAction(intention, stages, actions, plan, calendar, now, runningActionId)
+        : { currentAction: null, needsAiReplan: false, emptyStage: null };
     return { intention, stages, actions, plan, selection };
   });
   const active = projects.filter((p) => p.intention.status === "active");
@@ -113,32 +117,61 @@ export function loadFocusState(
     ? active.find((p) => p.actions.some((a) => a.id === runningActionId && a.status === "open"))
     : undefined;
   const selected = selectedIntentionId
-    ? active.find((p) => p.intention.id === selectedIntentionId && p.selection.currentAction !== null)
+    ? active.find(
+        (p) =>
+          p.intention.id === selectedIntentionId &&
+          (p.selection.currentAction !== null || p.selection.emptyStage !== null),
+      )
     : undefined;
   const focus = pinned ?? selected ?? active.find((p) => p.selection.currentAction !== null) ?? active[0];
   const currentAction = focus?.selection.currentAction ?? null;
+  const emptyStage = focus?.selection.emptyStage ?? null;
   return {
     projects,
     focus,
     currentAction,
-    needsAiReplan: active.length > 0 && currentAction === null,
+    needsAiReplan: active.length > 0 && currentAction === null && emptyStage === null,
+    emptyCurrentStage: focus && emptyStage ? { intentionId: focus.intention.id, stageId: emptyStage.stageId } : null,
     selectedProjectId: selected && focus === selected ? selected.intention.id : null,
   };
 }
 
 export function toProjectViewDto(state: ProjectState): ProjectViewDto {
   const actionsByStage = new Map<string, ActionDto[]>();
-  for (const action of state.actions) {
-    const list = actionsByStage.get(action.stageId) ?? [];
-    list.push(toActionDto(action));
-    actionsByStage.set(action.stageId, list);
+  const byStage = new Map<string, Action[]>();
+  for (const action of state.actions) byStage.set(action.stageId, [...(byStage.get(action.stageId) ?? []), action]);
+  // The list the owner sees IS the order `Сейчас` follows (one order, never two): finished first, then the
+  // approved order inside the Stage, then hand-added Actions by position.
+  for (const [stageId, list] of byStage) {
+    actionsByStage.set(stageId, orderStageActions(list, state.plan?.orderedActionIds ?? null).map(toActionDto));
   }
+  // One order: the plan shown (and given to the AI) is the effective order — never a stored order that lags
+  // behind what `Сейчас` follows.
+  const effectivePlan = state.plan && {
+    ...state.plan,
+    orderedActionIds: effectiveActionOrder({
+      stages: state.stages,
+      actions: state.actions,
+      orderedActionIds: state.plan.orderedActionIds,
+    }),
+  };
+  // «Current» is where `Сейчас` really is: the Stage walked on to once the owner's Stage is finished counts, so the
+  // badge never says one Stage while the screen works in another. No selection yet: the stored pointer.
+  const workingStageId =
+    state.selection.currentAction?.stageId ??
+    state.selection.emptyStage?.stageId ??
+    state.stages.find((stage) => stage.isCurrent)?.id;
   return {
     intention: toIntentionDto(state.intention),
-    stages: state.stages.map((stage) => ({ ...toStageDto(stage), actions: actionsByStage.get(stage.id) ?? [] })),
-    orderedActionPlan: state.plan ? toPlanDto(state.plan) : null,
-    unplannedActionIds: state.plan ? unplannedActionIds(state.plan, state.actions) : [],
+    stages: state.stages.map((stage) => ({
+      ...toStageDto(stage),
+      isCurrent: stage.id === workingStageId,
+      actions: actionsByStage.get(stage.id) ?? [],
+    })),
+    orderedActionPlan: effectivePlan ? toPlanDto(effectivePlan) : null,
+    unplannedActionIds: effectivePlan ? unplannedActionIds(effectivePlan, state.actions) : [],
     needsAiReplan: state.selection.needsAiReplan,
+    emptyCurrentStageId: state.selection.emptyStage?.stageId ?? null,
     progress: projectProgress(state.stages, state.actions),
   };
 }

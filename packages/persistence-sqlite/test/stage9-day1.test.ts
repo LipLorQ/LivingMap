@@ -219,7 +219,8 @@ describe("Day 1 · the owner switches between active projects", () => {
     const b = project("Продукт", ["Идеи"]);
     unwrap(app.commands.selectWorkProject(ui(), { intentionId: b.id }));
 
-    // Nothing admissible in B right now (its only action blocked): the choice is ignored, A leads by order.
+    // Nothing usable in B's current Stage right now (its only action blocked): the owner stays in B and is told
+    // so — A's work is not silently put in front of her (Stage 9 current-Stage hotfix).
     unwrap(
       app.commands.blockAction(ui(), {
         id: b.actions[0] as string,
@@ -227,7 +228,12 @@ describe("Day 1 · the owner switches between active projects", () => {
         reason: "ждёт ответа",
       }),
     );
-    expect(view()).toMatchObject({ selectedProjectId: null, currentAction: { actionId: a.actions[0] } });
+    expect(view()).toMatchObject({
+      selectedProjectId: b.id,
+      currentAction: null,
+      needsAiReplan: false,
+      emptyCurrentStage: { intentionId: b.id },
+    });
     unwrap(
       app.commands.unblockAction(ui(), {
         id: b.actions[0] as string,

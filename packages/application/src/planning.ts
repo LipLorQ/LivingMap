@@ -13,6 +13,7 @@ import {
   type Action,
   applyRouteChange,
   type EntityId,
+  effectiveActionOrder,
   type Instant,
   type Intention,
   type OrderedActionPlan,
@@ -20,7 +21,7 @@ import {
   planningFingerprint,
   type RouteChange,
   type Stage,
-  selectCurrentAction,
+  selectProjectExecution,
 } from "@living-map/domain";
 import type { ReadScope } from "./ports";
 
@@ -43,11 +44,11 @@ export const PLANNING_MEANINGS: Record<string, string> = {
   stages:
     "«Этапы» — the major phases of the route, in sequence. Exactly one is current («текущий»). Their position is the phase sequence.",
   actions:
-    "«Действия» — concrete steps. doneWhen («готово, когда») is the observable condition that makes an action done. status: open = can be worked on, blocked = unavailable (blocker.reason says why), done = finished. Action `position` is only the display order inside its Stage — it is NOT the execution order.",
+    "«Действия» — concrete steps. doneWhen («готово, когда») is the observable condition that makes an action done. status: open = can be worked on, blocked = unavailable (blocker.reason says why), done = finished. The order the user sees inside a Stage (arrows ↑↓) IS the execution order.",
   orderedActionPlan:
-    "«Порядок действий» — the canonical execution order across all Stages: given current reality, the order in which it makes sense to move. It always covers exactly the unfinished actions. null means no route has been approved yet. unplannedActionIds are unfinished actions the approved order does not cover yet (e.g. the user added them manually) — include them next time you order.",
+    "«Порядок действий» — the ONE effective execution order of the unfinished actions: the user's Stage order, and inside each Stage the order the user (or a proposal she confirmed) set. Actions she adds by hand are part of it at once. The user's own manual order is authoritative: an AI never overrides it silently — to change it, create_route_proposal with the new actionOrder and let her confirm (reorder_existing_actions is refused after she has set the order herself). null means no route has been approved yet. unplannedActionIds is a consistency check and should be empty.",
   permissions:
-    "You may NOT change strategy directly. A first route, any new/edited Stage or Action, doneWhen changes and route replanning go through create_route_proposal; changes to the desired result through propose_desired_result_change. The user reviews and confirms or rejects every proposal in the LivingMap desktop app — never claim a proposal is applied until get_proposal says accepted. The only direct writes you have are reorder_existing_actions (reorder the already-approved unfinished actions of an already-approved route) and save_memory (remember something; it never changes the route, the order or «Сейчас»). Changing the Season, the year, the 3-year horizon, the decades, a project's status or order (activate, pause, complete, release), the daily routines or «Чем ты не хочешь жертвовать ради целей?» is not available to you: suggest it to the user in words. Writing to the external calendar is not available.",
+    "You may NOT change strategy directly. A first route, any new/edited Stage or Action, doneWhen changes and route replanning go through create_route_proposal; changes to the desired result through propose_desired_result_change. The user reviews and confirms or rejects every proposal in the LivingMap desktop app — never claim a proposal is applied until get_proposal says accepted. The only direct writes you have are reorder_existing_actions (reorder the already-approved unfinished actions of an already-approved route — refused once the user set the order herself: propose it instead) and save_memory (remember something; it never changes the route, the order or «Сейчас»). Changing the Season, the year, the 3-year horizon, the decades, a project's status or order (activate, pause, complete, release), the daily routines or «Чем ты не хочешь жертвовать ради целей?» is not available to you: suggest it to the user in words. Writing to the external calendar is not available.",
   memory:
     "«Память» — decisions, facts, observations, preferences/constraints, dated commitments and ideas the user told LivingMap, each with the «+» Capture it came from. Before answering or planning, search_memory for anything relevant and respect what you find (earlier decisions and constraints still hold unless the user changed them). Memory is context, not strategy: a memory never changes the route by itself.",
   captures:
@@ -56,15 +57,15 @@ export const PLANNING_MEANINGS: Record<string, string> = {
     "pendingProposals are awaiting the user's decision. status=stale means LivingMap changed after the proposal was made; it can no longer be applied — reread the context and propose again if still relevant.",
   history: "recentHistory: meaningful changes, newest first. actor user-ui = the user, mcp-ai = an AI via MCP.",
   currentAction:
-    "«Сейчас» — the one Action CurrentActionSelector picked as admissible right now (ARCHITECTURE §26). It may belong to any active project (currentAction.intentionId): LivingMap asks the projects in the user's order and takes the first admissible Action of the first project that has one. null with needsAiReplan=false means there is no active project yet; null with needsAiReplan=true means orders exist but nothing in any of them can be safely selected — propose a replan (per project: projects[].needsAiReplan says which), do not invent a local order.",
+    "«Сейчас» — the one Action CurrentActionSelector picked as admissible right now (ARCHITECTURE §26): in each project the first usable Action of the owner's CURRENT Stage (her explicit choice — never overridden by an AI order; inside a Stage the approved order applies, hand-added Actions follow by position; a finished Stage hands over to the next one in her Stage order). If the current Stage has no usable Action, emptyCurrentStage says so and currentAction is null — do not treat that as a replan request. It may belong to any active project (currentAction.intentionId): LivingMap asks the projects in the user's order and takes the first admissible Action of the first project that has one. null with needsAiReplan=false means there is no active project yet; null with needsAiReplan=true means orders exist but nothing in any of them can be safely selected — propose a replan (per project: projects[].needsAiReplan says which), do not invent a local order.",
   execution:
     "«Исполнение» — factual work time the user tracked with Начать/Пауза/Продолжить/Готово: state of the current Action (idle/running/paused), all time worked on it, today's and this week's totals (local days, Monday-start weeks) and the user's daily work target. Facts, not a score. You can read it; you cannot start, pause or change it.",
   calendarSnapshot:
     "«Календарь» — read-only calendar snapshot (private iCal feed) LivingMap itself refreshed and stored. connected=false or a stale syncedAt means treat it as unavailable, not as ground truth.",
   reviewInbox:
-    "«Разборы» (Stage 7): counts only, for the nav badge. Reviews are a separate learning surface you do not participate in through this context.",
+    "«Анализ» (Stage 7, internally Reviews): counts only, for the nav badge. Reviews are a separate learning surface you do not participate in through this context.",
   activePlanningRules:
-    "Durable context the user confirmed from a repeated pattern in «Разборы» (e.g. «медицинские визиты обычно съедают половину рабочего дня»). Treat each as real context for planning/replanning — never a rigid rule you enforce mechanically, and never something you can create, confirm or deactivate yourself. An empty list is normal and means nothing has been confirmed yet.",
+    "Durable context the user confirmed from a repeated pattern in «Анализ» (e.g. «медицинские визиты обычно съедают половину рабочего дня»). Treat each as real context for planning/replanning — never a rigid rule you enforce mechanically, and never something you can create, confirm or deactivate yourself. An empty list is normal and means nothing has been confirmed yet.",
 };
 
 type PlanningScope = Pick<
@@ -140,20 +141,29 @@ function nextHardEventStart(snapshot: CalendarSnapshotDto, now: Instant): Instan
   return earliest;
 }
 
+export type ProjectSelection = {
+  currentAction: CurrentActionDto | null;
+  needsAiReplan: boolean;
+  /** The owner's current Stage holds no usable Action: `Сейчас` says so instead of showing another Stage's work. */
+  emptyStage: { stageId: EntityId } | null;
+};
+
 /**
  * Derives `Сейчас` for the current-view query (ARCHITECTURE §26). Not a domain aggregate: it is a
- * read-only projection recomputed on every read, never stored. No Intention yet is a distinct,
- * calmer state from `needsAiReplan` — there is nothing to replan, just nothing started.
+ * read-only projection recomputed on every read, never stored — so an owner edit (current Stage, Stage or
+ * Action order) can never leave a stale selection behind. The Stage walk and the in-Stage order live in
+ * the domain (`selectProjectExecution`). No Intention yet is a distinct, calmer state from `needsAiReplan`.
  */
 export function computeCurrentAction(
   intention: Intention | undefined,
+  stages: readonly Stage[],
   actions: readonly Action[],
   plan: OrderedActionPlan | undefined,
   calendarSnapshot: CalendarSnapshotDto,
   now: Instant,
   runningActionId: EntityId | null = null,
-): { currentAction: CurrentActionDto | null; needsAiReplan: boolean } {
-  if (!intention) return { currentAction: null, needsAiReplan: false };
+): ProjectSelection {
+  if (!intention) return { currentAction: null, needsAiReplan: false, emptyStage: null };
   // Running work pins `Сейчас` (Stage 5 §7): a reorder never yanks the card away mid-work. Only an
   // open Action can be running — completing/blocking it closes the interval in the same command.
   const running = runningActionId ? actions.find((a) => a.id === runningActionId && a.status === "open") : undefined;
@@ -167,25 +177,30 @@ export function computeCurrentAction(
         planRationale: plan?.rationale ?? null,
       },
       needsAiReplan: false,
+      emptyStage: null,
     };
   }
-  const selection = selectCurrentAction({
+  const selection = selectProjectExecution({
+    stages,
+    actions,
     orderedActionIds: plan ? plan.orderedActionIds : null,
-    actions: actions.map((a) => ({ id: a.id, status: a.status })),
     now,
     nextHardEventStart: nextHardEventStart(calendarSnapshot, now),
   });
-  if (selection.status === "needs-ai-replan") return { currentAction: null, needsAiReplan: true };
-  const selected = actions.find((a) => a.id === selection.actionId) as Action;
+  if (selection.status === "needs-ai-replan") return { currentAction: null, needsAiReplan: true, emptyStage: null };
+  if (selection.status === "stage-empty") {
+    return { currentAction: null, needsAiReplan: false, emptyStage: { stageId: selection.stageId } };
+  }
   return {
     currentAction: {
       actionId: selection.actionId,
       intentionId: intention.id,
-      stageId: selected.stageId,
+      stageId: selection.stageId,
       reason: selection.reason,
       planRationale: plan?.rationale ?? null,
     },
     needsAiReplan: false,
+    emptyStage: null,
   };
 }
 
@@ -248,7 +263,12 @@ function routePreview(s: PlanningScope, payload: RoutePayload, now: Instant): Ro
           isNew: !oldActions.has(a.id),
         })),
     })),
-    order: outcome.value.orderedActionIds.map((actionId) => ({ actionId, title: titles.get(actionId) ?? "" })),
+    // The order the owner confirms is the order that gets applied: the same effective order (Stage order is hers).
+    order: effectiveActionOrder({
+      stages: outcome.value.stages,
+      actions: outcome.value.actions,
+      orderedActionIds: outcome.value.orderedActionIds,
+    }).map((actionId) => ({ actionId, title: titles.get(actionId) ?? "" })),
   };
 }
 

@@ -48,7 +48,7 @@ export type ReviewDto = z.infer<typeof ReviewDtoSchema>;
 export const ReviewWithFindingsDtoSchema = ReviewDtoSchema.extend({ findings: z.array(ReviewFindingDtoSchema) });
 export type ReviewWithFindingsDto = z.infer<typeof ReviewWithFindingsDtoSchema>;
 
-/** Compact «Разборы» nav badge: how many things wait for the user, never a full list. */
+/** Compact «Анализ» nav badge: how many things wait for the user, never a full list. */
 export const ReviewInboxDtoSchema = z.object({
   readyReviews: z.int().nonnegative(),
   patternCandidates: z.int().nonnegative(),

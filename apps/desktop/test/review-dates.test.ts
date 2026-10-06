@@ -5,7 +5,7 @@ import { civilDayOf, formatDayRangeRu, formatDayRu, formatReviewPeriod } from ".
 // Never numeric, never browser-locale output.
 const day = (year: number, month: number, d: number) => ({ year, month, day: d });
 
-describe("Russian dates in «Разборы»", () => {
+describe("Russian dates in «Анализ»", () => {
   it("one day", () => {
     expect(formatDayRu(day(2026, 10, 5))).toBe("5 октября 26г");
     expect(formatDayRangeRu(day(2026, 10, 5), day(2026, 10, 5))).toBe("5 октября 26г");

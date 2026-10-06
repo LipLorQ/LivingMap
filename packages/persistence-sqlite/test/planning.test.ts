@@ -302,8 +302,10 @@ describe("route proposal lifecycle (desktop + MCP connections)", () => {
     const view = unwrap(mcp.queries.getPlanningContext());
     // What was previewed is exactly what now exists.
     expect(view.stages.map((s) => s.title)).toEqual(proposal.preview.stages.map((s) => s.title));
-    expect(view.stages.map((s) => s.actions.map((a) => [a.title, a.doneWhen]))).toEqual(
-      proposal.preview.stages.map((s) => s.actions.map((a) => [a.title, a.doneWhen])),
+    // The same Actions per Stage (the project list shows finished ones first, the preview by position).
+    const byTitle = (rows: string[][]) => [...rows].sort((x, y) => (x[0] as string).localeCompare(y[0] as string));
+    expect(view.stages.map((s) => byTitle(s.actions.map((a) => [a.title, a.doneWhen])))).toEqual(
+      proposal.preview.stages.map((s) => byTitle(s.actions.map((a) => [a.title, a.doneWhen]))),
     );
     expect(view.orderedActionPlan).toMatchObject({
       version: 1,
@@ -498,7 +500,11 @@ describe("SAFE WRITE: reorder_existing_actions", () => {
   it("reorders only the plan: same Actions, untouched text/status/blockers, version bump, actor mcp-ai", () => {
     const { mcp, ai, plan, handle, rev } = withApprovedRoute();
     const actionsBefore = handle.sqlite.prepare("select * from actions order by id").all();
-    const reversed = [...plan.orderedActionIds].reverse();
+    // The AI orders Actions inside the owner's Stages; the Stage order (Validation first) stays hers, so a reversal
+    // that crosses Stages collapses to the Stage order — the plan always IS the effective order.
+    const [interview, model, fix] = plan.orderedActionIds as [string, string, string];
+    const reversed = [fix, model, interview];
+    const effective = [interview, fix, model];
     const readAt = rev();
 
     const next = unwrap(
@@ -510,7 +516,12 @@ describe("SAFE WRITE: reorder_existing_actions", () => {
         rationale: "Fix friction first",
       }),
     );
-    expect(next).toMatchObject({ version: 2, orderedActionIds: reversed, createdBy: "mcp-ai", sourceRevision: readAt });
+    expect(next).toMatchObject({
+      version: 2,
+      orderedActionIds: effective,
+      createdBy: "mcp-ai",
+      sourceRevision: readAt,
+    });
     expect(handle.sqlite.prepare("select * from actions order by id").all()).toEqual(actionsBefore);
     expect(unwrap(mcp.queries.getPlanningContext()).recentHistory[0]).toMatchObject({
       actor: "mcp-ai",
@@ -573,15 +584,20 @@ describe("SAFE WRITE: reorder_existing_actions", () => {
     ).toMatchObject({ ok: false, error: { code: "CONFLICT_RELOAD" } });
   });
 
-  it("an Action the user adds after approval shows up as unplanned and can then be ordered safely", () => {
+  it("an Action the user adds after approval is part of the order at once (appended to its Stage) and the AI can still reorder", () => {
     const { desktop, mcp, ui, ai, seed, plan, rev } = withApprovedRoute();
     const added = unwrap(desktop.commands.addAction(ui(), { stageId: seed.stage.id, title: "New", doneWhen: "" }));
-    expect(unwrap(mcp.queries.getPlanningContext()).unplannedActionIds).toEqual([added.id]);
+    const context = unwrap(mcp.queries.getPlanningContext());
+    expect(context.unplannedActionIds).toEqual([]);
+    expect(context.orderedActionPlan?.orderedActionIds).toEqual([...plan.orderedActionIds, added.id]);
+    // Adding an Action is not the owner taking the order over: the AI may still reorder directly.
+    const current = context.orderedActionPlan;
+    if (!current) throw new Error("plan");
     unwrap(
       mcp.commands.reorderExistingActions(ai(), {
         intentionId: plan.intentionId,
         expectedRevision: rev(),
-        expectedPlanVersion: plan.version,
+        expectedPlanVersion: current.version,
         orderedActionIds: [added.id, ...plan.orderedActionIds],
         rationale: "Include the user's new action first",
       }),

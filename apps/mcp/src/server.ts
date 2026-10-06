@@ -128,7 +128,7 @@ export function createLivingMapMcpServer(
     "reorder_existing_actions",
     {
       description:
-        "SAFE WRITE, applied immediately: reorder the unfinished actions of an ALREADY APPROVED route (orderedActionPlan must exist) and update the order's rationale. Must list exactly every unfinished action once. Cannot create, delete, rename, complete or unblock anything. Before the first route is approved, use create_route_proposal instead.",
+        "SAFE WRITE, applied immediately: reorder the unfinished actions of an ALREADY APPROVED route (orderedActionPlan must exist) and update the order's rationale. Must list exactly every unfinished action once. Cannot create, delete, rename, complete or unblock anything. Before the first route is approved, or once the user has set the order herself (REQUIRES_CONFIRMATION), use create_route_proposal with the new actionOrder instead — the user's own order is authoritative and only she confirms a replacement. Orders actions inside the user's Stages; the Stage order stays hers.",
       inputSchema: ReorderExistingActionsInputSchema,
       annotations: write,
     },

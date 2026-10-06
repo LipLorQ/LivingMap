@@ -13,7 +13,7 @@ import { formatPeriod, formatProgress } from "./format";
 import { PlanSection } from "./proposals";
 
 const WHY_NOW_LOCAL: Record<WhyNowReasonDto["kind"], string> = {
-  "first-in-plan": "Первое действие в подтверждённом порядке.",
+  "first-in-plan": "Первое невыполненное действие текущего этапа.",
   "previous-done": "Предыдущие действия по порядку уже выполнены.",
   "previous-blocked": "Предыдущие действия по порядку заблокированы.",
   working: "Над этим действием сейчас идёт работа.",
@@ -379,6 +379,46 @@ function NeedsAiReplan({ onAskReplan }: { onAskReplan: (projectTitle?: string) =
   );
 }
 
+/**
+ * The owner's current Stage has no usable next Action (hotfix, Stage 9 Day 1): say so plainly. Never another
+ * Stage's work in its place; nothing is generated here — she adds an Action or asks the AI to help.
+ */
+function EmptyCurrentStage({
+  stageTitle,
+  onAddAction,
+  onAskHelp,
+}: {
+  stageTitle: string | undefined;
+  onAddAction: () => void;
+  onAskHelp: () => void;
+}) {
+  return (
+    <div data-testid="now-empty-stage" className="space-y-2">
+      <h2 className="text-base font-semibold">Сейчас</h2>
+      <p className="font-medium">В текущем этапе пока нет следующего действия.</p>
+      {stageTitle && <p className="text-sm text-neutral-600">Этап «{stageTitle}»</p>}
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          data-testid="now-empty-stage-add"
+          className="rounded border border-blue-500 bg-blue-600 px-3 py-1 text-white"
+          onClick={onAddAction}
+        >
+          Добавить действие
+        </button>
+        <button
+          type="button"
+          data-testid="now-empty-stage-ask-ai"
+          className="rounded border border-violet-500 px-3 py-1 text-violet-800"
+          onClick={onAskHelp}
+        >
+          Попросить ИИ помочь
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function CalendarSection({
   snapshot,
   onConnect,
@@ -584,6 +624,12 @@ function ProjectsGlance({
           <li key={p.intention.id} data-testid="now-project-row" data-focus={p.intention.id === focusId}>
             <span className={p.intention.id === focusId ? "font-medium" : ""}>{p.intention.title}</span>
             <span className="text-xs text-neutral-500"> · {formatProgress(p.progress)}</span>
+            {p.emptyCurrentStageId && (
+              <span data-testid="now-project-empty-stage" className="text-xs text-amber-800">
+                {" "}
+                · в текущем этапе нет действий
+              </span>
+            )}
             {p.needsAiReplan && (
               <>
                 <span className="text-xs text-amber-800"> · нужен новый порядок </span>
@@ -603,15 +649,21 @@ export function NowScreen({
   onRefreshCalendar,
   onDisconnectCalendar,
   onAskReplan,
+  onAskHelp,
   onSelectProject,
   onOpenMap,
+  onOpenProjects,
   execution,
 }: {
   view: CurrentViewDto;
   /** Opens `+` with a prefilled request — for this project when one is named. Never sent by itself. */
   onAskReplan: (projectTitle?: string) => void;
+  /** Opens `+` with a prefilled request about an empty current Stage — never sent by itself. */
+  onAskHelp: (projectTitle: string, stageTitle: string) => void;
   onSelectProject: (intentionId: string) => Promise<unknown>;
   onOpenMap: () => void;
+  /** The «Проекты» tab, where Actions are added. */
+  onOpenProjects: () => void;
   execution: ExecutionHandlers;
   onConnectCalendar: (icalUrl: string) => Promise<unknown>;
   onRefreshCalendar: () => Promise<unknown>;
@@ -621,6 +673,10 @@ export function NowScreen({
   const actionsById = new Map(view.projects.flatMap((p) => p.stages.flatMap((s) => s.actions)).map((a) => [a.id, a]));
   const currentProject = view.projects.find((p) => p.intention.id === view.currentAction?.intentionId);
   const focusId = view.currentAction?.intentionId ?? view.intention?.id;
+  const emptyProject = view.emptyCurrentStage
+    ? view.projects.find((p) => p.intention.id === view.emptyCurrentStage?.intentionId)
+    : undefined;
+  const emptyStageTitle = emptyProject?.stages.find((st) => st.id === view.emptyCurrentStage?.stageId)?.title;
 
   return (
     <div data-testid="now-screen" className="space-y-4">
@@ -632,6 +688,12 @@ export function NowScreen({
         <ProjectSwitcher view={view} focusId={focusId} onSelect={onSelectProject} />
         {!view.intention ? (
           <p data-testid="now-empty">Пока нет активного проекта. Начни с вкладки «Проекты».</p>
+        ) : view.emptyCurrentStage ? (
+          <EmptyCurrentStage
+            stageTitle={emptyStageTitle}
+            onAddAction={onOpenProjects}
+            onAskHelp={() => onAskHelp(emptyProject?.intention.title ?? "", emptyStageTitle ?? "")}
+          />
         ) : view.needsAiReplan || !view.currentAction ? (
           <>
             <NeedsAiReplan onAskReplan={onAskReplan} />
@@ -671,13 +733,7 @@ export function NowScreen({
           <button type="button" data-testid="now-toggle-order" onClick={() => setShowOrder((v) => !v)}>
             {showOrder ? "Скрыть порядок действий" : "Показать порядок действий"}
           </button>
-          {showOrder && (
-            <PlanSection
-              plan={view.orderedActionPlan}
-              stages={view.stages}
-              unplannedActionIds={view.unplannedActionIds}
-            />
-          )}
+          {showOrder && <PlanSection plan={view.orderedActionPlan} stages={view.stages} />}
         </section>
       )}
     </div>

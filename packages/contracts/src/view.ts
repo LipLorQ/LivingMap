@@ -27,7 +27,10 @@ export const WhyNowReasonSchema = z.discriminatedUnion("kind", [
 ]);
 export type WhyNowReasonDto = z.infer<typeof WhyNowReasonSchema>;
 
-/** The one Action CurrentActionSelector picked (ARCHITECTURE §26). Never present without a plan. */
+/**
+ * The one Action `Сейчас` points at (ARCHITECTURE §26): the first usable Action of the owner's current Stage.
+ * Never present without an approved route.
+ */
 export const CurrentActionDtoSchema = z.object({
   actionId: z.uuid(),
   /** Where it lives, so the main screen can show «проект → этап → действие» without searching. */
@@ -57,6 +60,8 @@ export const ProjectViewDtoSchema = z.object({
   unplannedActionIds: z.array(z.uuid()),
   /** This project has a route or work but nothing in its order can be safely selected right now. */
   needsAiReplan: z.boolean(),
+  /** The owner's current Stage holds no usable Action: the project has no «Сейчас» until she adds one. */
+  emptyCurrentStageId: z.uuid().nullable(),
   progress: ProjectProgressDtoSchema,
 });
 export type ProjectViewDto = z.infer<typeof ProjectViewDtoSchema>;
@@ -93,9 +98,14 @@ export const CurrentViewDtoSchema = z.object({
   currentAction: CurrentActionDtoSchema.nullable(),
   /** True when active projects exist but no Action in any of them can be safely selected as `Сейчас`. */
   needsAiReplan: z.boolean(),
+  /**
+   * The focus project's current Stage — chosen by the owner — has no usable next Action. `Сейчас` then shows
+   * that, never another Stage's work (`currentAction` is null, `needsAiReplan` false).
+   */
+  emptyCurrentStage: z.object({ intentionId: z.uuid(), stageId: z.uuid() }).nullable(),
   calendarSnapshot: CalendarSnapshotDtoSchema,
   execution: ExecutionDtoSchema,
-  /** Compact «Разборы» nav badge (Stage 7); the full list/detail is its own query. */
+  /** Compact «Анализ» nav badge (Stage 7); the full list/detail is its own query. */
   reviewInbox: ReviewInboxDtoSchema,
 });
 export type CurrentViewDto = z.infer<typeof CurrentViewDtoSchema>;

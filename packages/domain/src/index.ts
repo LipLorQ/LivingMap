@@ -14,8 +14,15 @@ export type { Capture, CaptureState } from "./capture";
 export { CAPTURE_AUTO_RETRY_ATTEMPTS, CAPTURE_TEXT_MAX, createCapture } from "./capture";
 export type { CourseChange, CourseLevel } from "./course-change";
 export { COURSE_SUMMARY_MAX, createCourseChange, resolveCourseChange } from "./course-change";
-export type { CurrentActionSelection, SelectableAction, WhyNowReason } from "./current-action";
-export { selectCurrentAction } from "./current-action";
+export type {
+  CurrentActionSelection,
+  ExecutionAction,
+  ExecutionStage,
+  ProjectExecution,
+  SelectableAction,
+  WhyNowReason,
+} from "./current-action";
+export { effectiveActionOrder, orderStageActions, selectCurrentAction, selectProjectExecution } from "./current-action";
 export type { GoodLifeCondition } from "./good-life-condition";
 export { CONDITION_TEXT_MAX, createGoodLifeCondition, editGoodLifeCondition } from "./good-life-condition";
 export type { HouseholdItem, HouseholdItemStatus } from "./household";
@@ -47,7 +54,15 @@ export {
   rejectPattern,
 } from "./pattern";
 export type { OrderedActionPlan } from "./plan";
-export { createPlan, PLAN_RATIONALE_MAX, replacePlanOrder, unplannedActionIds, validateActionOrder } from "./plan";
+export {
+  createPlan,
+  OWNER_ORDER_NOTE,
+  ownerOrderRationale,
+  PLAN_RATIONALE_MAX,
+  replacePlanOrder,
+  unplannedActionIds,
+  validateActionOrder,
+} from "./plan";
 export type { ApprovedPlanAction, ApprovedPlanStage, PlanReplacement } from "./plan-replacement";
 export { APPROVED_PLAN_MAX_ACTIONS, APPROVED_PLAN_MAX_STAGES, replaceProjectPlan } from "./plan-replacement";
 export type { Proposal, ProposalKind, ProposalStatus } from "./proposal";
@@ -88,7 +103,7 @@ export { createRoutineItem, editRoutineItem, ROUTINE_MAX_ITEMS_PER_KIND, ROUTINE
 export type { Season, SeasonHistoryEntry } from "./season";
 export { createSeason, rewordSeason, SEASON_FOCUS_MAX, SEASON_WHY_MAX, startNewSeason } from "./season";
 export type { Stage } from "./stage";
-export { createStage, editStageTitle, isCurrentStageUnambiguous, STAGE_TITLE_MAX } from "./stage";
+export { createStage, editStageTitle, isCurrentStageUnambiguous, STAGE_TITLE_MAX, stageToFollowReorder } from "./stage";
 export type { DecadePlanItem, ThreeYearHorizon, YearDirection } from "./strategy";
 export {
   createDecadeItem,

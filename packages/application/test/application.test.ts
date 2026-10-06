@@ -195,7 +195,8 @@ describe("Intention → Stage → Action", () => {
     if (!view.ok) throw new Error("expected ok");
     expect(view.value.intention?.desiredResult).toBe("v1 is in users' hands");
     expect(view.value.stages.map((s) => s.title)).toEqual(["Design", "Build"]);
-    expect(view.value.stages[1]?.actions.map((a) => a.title)).toEqual(["Write tests", "Write code"]);
+    // Finished Actions stay on top (history), unfinished ones follow in execution order: "Write code" is done.
+    expect(view.value.stages[1]?.actions.map((a) => a.title)).toEqual(["Write code", "Write tests"]);
 
     expect(store.revision).toBeGreaterThan(0);
   });
@@ -331,7 +332,8 @@ describe("Сейчас / calendar (Stage 4)", () => {
       reason: { kind: "previous-done" },
     });
 
-    // Blocking/completing the last remaining Action leaves nothing admissible: NeedsAIReplan.
+    // Blocking the last remaining Action leaves nothing usable in the owner's current Stage: she is told so
+    // (never another Stage's work, never an invented replan).
     const blocked = app.commands.blockAction(ui, {
       id: secondActionId as string,
       expectedVersion: 1,
@@ -341,7 +343,11 @@ describe("Сейчас / calendar (Stage 4)", () => {
     const thirdView = app.queries.getCurrentView();
     if (!thirdView.ok) throw new Error("expected ok");
     expect(thirdView.value.currentAction).toBeNull();
-    expect(thirdView.value.needsAiReplan).toBe(true);
+    expect(thirdView.value.needsAiReplan).toBe(false);
+    expect(thirdView.value.emptyCurrentStage).toEqual({
+      intentionId: thirdView.value.intention?.id,
+      stageId: thirdView.value.stages[0]?.id,
+    });
   });
 
   it("saveCalendarSnapshot is user-ui/system only; mcp-ai is denied and nothing is persisted", () => {

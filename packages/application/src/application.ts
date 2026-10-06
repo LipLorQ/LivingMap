@@ -137,6 +137,7 @@ import {
   editIntention,
   editRoutineItem,
   editStageTitle,
+  effectiveActionOrder,
   type GoodLifeCondition,
   growPatternCandidate,
   type HouseholdItem,
@@ -152,6 +153,7 @@ import {
   MAX_PENDING_PROPOSALS,
   type Memory,
   nextActivePosition,
+  ownerOrderRationale,
   type Pattern,
   type PlanningRule,
   type PlanReplacement,
@@ -175,6 +177,7 @@ import {
   rewordHorizon,
   rewordSeason,
   rewordYearDirection,
+  stageToFollowReorder,
   startNewSeason,
   totalWorkedMs,
   unblockAction,
@@ -201,6 +204,7 @@ import {
   toStrategyHistoryDto,
 } from "./map";
 import {
+  computeCurrentAction,
   contextFingerprint,
   intentionTree,
   PLANNING_MEANINGS,
@@ -385,7 +389,7 @@ export function createApplication(deps: ApplicationDeps) {
     // One batched query per project instead of one per Stage: this view is re-fetched after every write
     // (via the revision watcher), so an N+1 here would recur continuously.
     const focusState = loadFocusState(s, now, workingActionId(s, now), s.settings.selectedIntentionId());
-    const { focus, currentAction, needsAiReplan } = focusState;
+    const { focus, currentAction, needsAiReplan, emptyCurrentStage } = focusState;
     const focusView = focus ? toProjectViewDto(focus) : undefined;
     const activeCount = focusState.projects.filter((p) => p.intention.status === "active").length;
     const snapshots = focusState.projects.map((p) => snapshotOf(p.intention, p.stages, p.actions));
@@ -407,13 +411,14 @@ export function createApplication(deps: ApplicationDeps) {
       selectedProjectId: focusState.selectedProjectId,
       currentAction,
       needsAiReplan,
+      emptyCurrentStage,
       calendarSnapshot: s.calendar.get(),
       execution: execution(s, currentAction?.actionId ?? null, now),
       reviewInbox: reviewInbox(s),
     };
   }
 
-  /** Compact «Разборы» nav badge (Stage 7): counts only, never the full list. */
+  /** Compact «Анализ» nav badge (Stage 7): counts only, never the full list. */
   function reviewInbox(s: Pick<ReadScope, "reviews" | "reviewFindings" | "patterns">): ReviewInboxDto {
     // "Ready" alone would never clear: a Review stays `ready` forever even after every finding is
     // resolved. The badge means "waits for you", so only a still-`proposed` finding counts.
@@ -485,6 +490,117 @@ export function createApplication(deps: ApplicationDeps) {
   function stopIfRunningOn(s: WriteScope, actionId: EntityId, at: Instant): void {
     const running = s.work.findRunning();
     if (running?.actionId === actionId) s.work.closeIfRunning(running.id, closeAt(running, at));
+  }
+
+  /**
+   * Makes the stored plan describe the ONE effective order (Stage 9 Day 1 manual-order hotfix). Every owner
+   * command that changes order or membership calls this, so `Сейчас`, the «Порядок действий» list and the AI's
+   * context can never disagree: owner Stage order, then (inside a Stage) the stored order, Actions added by
+   * hand appended. `stageOrder` is the owner's explicit new order inside one Stage (a ↑/↓ press).
+   * `takeOver`: the owner explicitly ordered something — the plan becomes hers (author + a note on the
+   * rationale, the AI's reasoning kept behind it) and an AI may only PROPOSE a replacement from then on.
+   * Without it (a hand-added or reopened Action just joins the order) author and rationale stay as they were.
+   * No approved route = nothing to keep in step (that stays NeedsAIReplan). Writes only when something changed.
+   */
+  function reconcilePlan(
+    s: WriteScope,
+    intentionId: EntityId,
+    actor: string,
+    now: Instant,
+    takeOver: boolean,
+    stageOrder?: readonly EntityId[],
+  ): Result<null> {
+    const plan = s.plans.findByIntention(intentionId);
+    if (!plan) return ok(null);
+    const { stages, actions } = intentionTree(s, intentionId);
+    const ownerSet = new Set(stageOrder ?? []);
+    const baseline = [...(stageOrder ?? []), ...plan.orderedActionIds.filter((id) => !ownerSet.has(id))];
+    const next = effectiveActionOrder({ stages, actions, orderedActionIds: baseline });
+    if (next.length === 0) return ok(null);
+    // Compare with what the stored plan means for unfinished Actions (done ones left in it are not order).
+    const open = new Set(actions.filter((a) => a.status !== "done").map((a) => a.id));
+    if (next.join() === plan.orderedActionIds.filter((id) => open.has(id)).join()) return ok(null);
+    const replaced = replacePlanOrder(
+      plan,
+      {
+        orderedActionIds: next,
+        rationale: takeOver ? ownerOrderRationale(plan.rationale) : plan.rationale,
+        createdBy: takeOver ? actor : plan.createdBy,
+        sourceRevision: s.stateRevision(),
+      },
+      now,
+    );
+    if (!replaced.ok) return err("VALIDATION_ERROR", replaced.reason);
+    if (!s.plans.updateIfVersion(replaced.value, plan.version)) {
+      return err("CONFLICT_RELOAD", "Plan changed concurrently; reload and retry");
+    }
+    return ok(null);
+  }
+
+  /**
+   * After an owner command changed order or context: work may continue only on the Action `Сейчас` now points
+   * at. If the running interval belongs to this project and is no longer the owner's target (another Stage
+   * became current, an Action was moved above it...), it is paused in the same transaction — elapsed time stays
+   * on its own Action — and nothing is started on the new target. Other projects' work is left alone.
+   */
+  function settleExecution(s: WriteScope, intentionId: EntityId, now: Instant): Result<null> {
+    const running = s.work.findRunning();
+    if (!running) return ok(null);
+    const runningAction = s.actions.findById(running.actionId);
+    const runningStage = runningAction && s.stages.findById(runningAction.stageId);
+    if (runningStage?.intentionId !== intentionId) return ok(null);
+    const intention = s.intentions.findById(intentionId);
+    const { stages, actions } = intentionTree(s, intentionId);
+    const target = computeCurrentAction(
+      intention,
+      stages,
+      actions,
+      s.plans.findByIntention(intentionId),
+      s.calendar.get(),
+      now,
+      null,
+    ).currentAction;
+    if (target?.actionId === running.actionId) return ok(null);
+    return stopInterval(s, running, now, "work.pause");
+  }
+
+  /**
+   * The Stage the owner is in just got its last Action done: the pointer moves on NOW to the next Stage with work
+   * in her order, so the stored pointer, the badge, progress and the selection agree — a later edit
+   * in the finished Stage then cannot jump her back, and she can pin the Stage she is really in.
+   */
+  function advanceFinishedStage(s: WriteScope, stageId: EntityId, now: Instant): void {
+    const stage = s.stages.findById(stageId);
+    if (!stage?.isCurrent) return;
+    const { stages, actions } = intentionTree(s, stage.intentionId);
+    const own = actions.filter((a) => a.stageId === stageId);
+    if (own.length === 0 || own.some((a) => a.status !== "done")) return;
+    // Walk HER Stage order from the finished Stage (wrapping) to the first Stage with unfinished work — blocked
+    // ones count (she stays in them and sees the honest empty state); empty placeholder Stages are skipped.
+    const ordered = [...stages].sort((x, y) => x.position - y.position || x.id.localeCompare(y.id));
+    const at = ordered.findIndex((st) => st.id === stageId);
+    const next = [...ordered.slice(at + 1), ...ordered.slice(0, at)].find((st) =>
+      actions.some((act) => act.stageId === st.id && act.status !== "done"),
+    );
+    if (next) s.stages.setCurrent(stage.intentionId, next.id, now);
+  }
+
+  /** The common tail of an owner command that touched one Stage's Actions: order in step, work on the target. */
+  function settleAfterOwnerChange(
+    s: WriteScope,
+    stageId: EntityId,
+    actor: string,
+    now: Instant,
+    mode: "none" | "membership" | "order",
+    stageOrder?: readonly EntityId[],
+  ): Result<null> {
+    const stage = s.stages.findById(stageId);
+    if (!stage) return ok(null);
+    if (mode !== "none") {
+      const synced = reconcilePlan(s, stage.intentionId, actor, now, mode === "order", stageOrder);
+      if (!synced.ok) return synced;
+    }
+    return settleExecution(s, stage.intentionId, now);
   }
 
   function checkRevision(s: WriteScope, expected: number): Result<never> | undefined {
@@ -611,8 +727,10 @@ export function createApplication(deps: ApplicationDeps) {
       log("action", action.id, "edited");
     }
 
+    // Written AS the effective order: an accepted proposal sets the order inside each Stage; Stage order stays the owner's.
+    const written = intentionTree(s, payload.intentionId);
     const order = {
-      orderedActionIds: outcome.value.orderedActionIds,
+      orderedActionIds: effectiveActionOrder({ ...written, orderedActionIds: outcome.value.orderedActionIds }),
       rationale: proposal.rationale,
       createdBy: proposal.createdBy,
       sourceRevision: proposal.baseRevision,
@@ -631,6 +749,9 @@ export function createApplication(deps: ApplicationDeps) {
       s.plans.insert(created.value);
       log("plan", created.value.id, "created");
     }
+    // The route changed under the owner's feet: work that is no longer the target pauses (nothing auto-starts).
+    const settled = settleExecution(s, payload.intentionId, now);
+    if (!settled.ok) return settled;
     return ok("applied");
   }
 
@@ -1510,7 +1631,29 @@ export function createApplication(deps: ApplicationDeps) {
               input.orderedIds,
             );
             if (!positions.ok) return err("VALIDATION_ERROR", positions.reason);
-            s.stages.reorder(positions.value, clock.now());
+            const now = clock.now();
+            s.stages.reorder(positions.value, now);
+            // A Stage moved above the current one comes first: the current Stage follows the owner's new
+            // order instead of a stale pointer shadowing it.
+            const actions = s.actions.listByStages(current.map((stage) => stage.id));
+            const withoutWork = new Set(
+              current
+                .filter((stage) => actions.every((a) => a.stageId !== stage.id || a.status === "done"))
+                .map((stage) => stage.id),
+            );
+            const follow = stageToFollowReorder({
+              before: current.map((stage) => stage.id),
+              after: input.orderedIds,
+              currentId: current.find((stage) => stage.isCurrent)?.id ?? null,
+              withoutWork,
+            });
+            if (follow) s.stages.setCurrent(input.intentionId, follow, now);
+            // The Stage order IS the execution order: the stored plan follows it, and work that is no longer
+            // the target is paused (never auto-started elsewhere).
+            const synced = reconcilePlan(s, input.intentionId, ctx.actor, now, true);
+            if (!synced.ok) return synced;
+            const settled = settleExecution(s, input.intentionId, now);
+            if (!settled.ok) return settled;
             s.recordChange({
               commandType: "stage.reorder",
               entityType: "intention",
@@ -1527,7 +1670,10 @@ export function createApplication(deps: ApplicationDeps) {
           transact(ctx, (s): Result<StageDto[]> => {
             const target = s.stages.findById(input.stageId);
             if (!target || target.intentionId !== input.intentionId) return err("NOT_FOUND", "Stage not found");
-            s.stages.setCurrent(input.intentionId, input.stageId, clock.now());
+            const now = clock.now();
+            s.stages.setCurrent(input.intentionId, input.stageId, now);
+            const settled = settleExecution(s, input.intentionId, now);
+            if (!settled.ok) return settled;
             s.recordChange({
               commandType: "stage.setCurrent",
               entityType: "stage",
@@ -1554,6 +1700,10 @@ export function createApplication(deps: ApplicationDeps) {
             });
             if (!created.ok) return err("VALIDATION_ERROR", created.reason);
             s.actions.insert(created.value);
+            // An Action the owner adds by hand is part of the execution order at once (appended to its Stage):
+            // no AI replan is needed to make it doable, and it never waits outside the order.
+            const settled = settleAfterOwnerChange(s, input.stageId, ctx.actor, created.value.createdAt, "membership");
+            if (!settled.ok) return settled;
             s.recordChange({
               commandType: "action.add",
               entityType: "action",
@@ -1604,6 +1754,7 @@ export function createApplication(deps: ApplicationDeps) {
             if (!s.actions.updateIfVersion(completed.value, input.expectedVersion)) {
               return err("CONFLICT_RELOAD", "Action changed concurrently; reload and retry");
             }
+            advanceFinishedStage(s, current.stageId, completed.value.updatedAt);
             s.recordChange({
               commandType: "action.complete",
               entityType: "action",
@@ -1654,6 +1805,8 @@ export function createApplication(deps: ApplicationDeps) {
             if (!s.actions.updateIfVersion(unblocked.value, input.expectedVersion)) {
               return err("CONFLICT_RELOAD", "Action changed concurrently; reload and retry");
             }
+            const settled = settleAfterOwnerChange(s, current.stageId, ctx.actor, unblocked.value.updatedAt, "none");
+            if (!settled.ok) return settled;
             s.recordChange({
               commandType: "action.unblock",
               entityType: "action",
@@ -1678,6 +1831,15 @@ export function createApplication(deps: ApplicationDeps) {
             if (!s.actions.updateIfVersion(reopened.value, input.expectedVersion)) {
               return err("CONFLICT_RELOAD", "Action changed concurrently; reload and retry");
             }
+            // Back among the unfinished Actions: it re-enters the execution order at its Stage position.
+            const settled = settleAfterOwnerChange(
+              s,
+              current.stageId,
+              ctx.actor,
+              reopened.value.updatedAt,
+              "membership",
+            );
+            if (!settled.ok) return settled;
             s.recordChange({
               commandType: "action.reopen",
               entityType: "action",
@@ -1699,7 +1861,13 @@ export function createApplication(deps: ApplicationDeps) {
               input.orderedIds,
             );
             if (!positions.ok) return err("VALIDATION_ERROR", positions.reason);
-            s.actions.reorder(positions.value, clock.now());
+            const now = clock.now();
+            s.actions.reorder(positions.value, now);
+            // The arrows change the REAL execution order: the stored plan takes the owner's order for this
+            // Stage (an older AI order must never shadow it), and a running timer that is no longer on the
+            // first usable Action is paused.
+            const settled = settleAfterOwnerChange(s, input.stageId, ctx.actor, now, "order", input.orderedIds);
+            if (!settled.ok) return settled;
             s.recordChange({
               commandType: "action.reorder",
               entityType: "stage",
@@ -2102,16 +2270,31 @@ export function createApplication(deps: ApplicationDeps) {
             if (!isAtVersion(plan, input.expectedPlanVersion)) {
               return err("CONFLICT_RELOAD", `Plan changed (now v${plan.version}); reread the context and retry`);
             }
-            const order = validateActionOrder(input.orderedActionIds, intentionTree(s, input.intentionId).actions);
+            // Owner manual order is authoritative: once the owner has set the order herself, an AI may only
+            // PROPOSE a new one (create_route_proposal) — it never silently overwrites hers.
+            if (!plan.createdBy.startsWith("mcp-")) {
+              return err(
+                "REQUIRES_CONFIRMATION",
+                "The owner set this order herself: propose the new order with create_route_proposal and let her confirm it",
+              );
+            }
+            const tree = intentionTree(s, input.intentionId);
+            const order = validateActionOrder(input.orderedActionIds, tree.actions);
             if (!order.ok) return err("VALIDATION_ERROR", order.reason);
+            // The AI orders Actions inside the owner's Stages; Stage order stays hers (one effective order).
+            const effective = effectiveActionOrder({ ...tree, orderedActionIds: order.value });
+            const open = new Set(tree.actions.filter((a) => a.status !== "done").map((a) => a.id));
             // A no-op would still bump the plan version and stale every pending route proposal.
-            if (order.value.join() === plan.orderedActionIds.join() && input.rationale.trim() === plan.rationale) {
+            if (
+              effective.join() === plan.orderedActionIds.filter((id) => open.has(id)).join() &&
+              input.rationale.trim() === plan.rationale
+            ) {
               return err("VALIDATION_ERROR", "Order and rationale are unchanged; nothing to do");
             }
             const next = replacePlanOrder(
               plan,
               {
-                orderedActionIds: order.value,
+                orderedActionIds: effective,
                 rationale: input.rationale,
                 createdBy: ctx.actor,
                 sourceRevision: input.expectedRevision,
@@ -2287,7 +2470,7 @@ export function createApplication(deps: ApplicationDeps) {
             if (!target) return err("NOT_FOUND", "Project not found");
             if (target.status !== "active") return err("VALIDATION_ERROR", "Only an active project can be worked on");
             const usable = loadFocusState(s, now, null).projects.find((p) => p.intention.id === target.id);
-            if (!usable?.selection.currentAction) {
+            if (!usable?.selection.currentAction && !usable?.selection.emptyStage) {
               return err(
                 "NEEDS_AI_REPLAN",
                 "Nothing in this project's order can be done now; ask the AI to rebuild it",

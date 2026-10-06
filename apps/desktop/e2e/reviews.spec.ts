@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { databaseFile, openDesktopDatabase, type SqliteHandle } from "@living-map/persistence-sqlite";
 import { type ElectronApplication, _electron as electron, expect, type Page, test } from "@playwright/test";
 
-// Stage 7 «Разборы». The scheduler/evidence/pattern pipeline itself is covered end-to-end against
+// Stage 7 «Анализ». The scheduler/evidence/pattern pipeline itself is covered end-to-end against
 // real SQLite in persistence-sqlite/test/review.test.ts and against the fake CLI in
 // claude-code-cli.test.ts; the real desktop app has no way to time-travel its own clock to produce a
 // closed past period with real evidence, so this file seeds a `ready` Review directly by SQL (test
@@ -79,7 +79,7 @@ async function openReviews(win: Page) {
   await expect(win.getByTestId("reviews")).toBeVisible();
 }
 
-test("«Разборы»: badge shows a ready Review; «Всё верно» accepts the AI's own draft", async () => {
+test("«Анализ»: badge shows a ready Review; «Всё верно» accepts the AI's own draft", async () => {
   const { reviewId } = seedReadyDaily(1, null);
   const app = await launch();
   try {
@@ -98,7 +98,7 @@ test("«Разборы»: badge shows a ready Review; «Всё верно» acce
   }
 });
 
-test("«Разборы»: a correction is saved as the accepted learning; the AI draft is kept", async () => {
+test("«Анализ»: a correction is saved as the accepted learning; the AI draft is kept", async () => {
   const { reviewId } = seedReadyDaily(1, null);
   const app = await launch();
   try {
@@ -116,7 +116,7 @@ test("«Разборы»: a correction is saved as the accepted learning; the AI
   }
 });
 
-test("«Разборы»: two accepted findings from distinct periods surface a Pattern candidate; confirming activates a rule", async () => {
+test("«Анализ»: two accepted findings from distinct periods surface a Pattern candidate; confirming activates a rule", async () => {
   const first = seedReadyDaily(1, "doctor-visits");
   const second = seedReadyDaily(2, "doctor-visits");
   const app = await launch();

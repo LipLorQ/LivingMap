@@ -70,7 +70,7 @@ function EvidenceList({ items }: { items: readonly { id: string; text: string }[
   );
 }
 
-/** «Разборы» (Stage 7): a learning surface — «Что стоит учитывать дальше», not a diary. */
+/** «Анализ» (Stage 7): a learning surface — «Что стоит учитывать дальше», not a diary. */
 export function ReviewsPanel(handlers: Handlers) {
   const [reviews, setReviews] = useState<ReviewDto[] | null>(null);
   const [selected, setSelected] = useState<ReviewWithFindingsDto | null>(null);
@@ -112,7 +112,7 @@ export function ReviewsPanel(handlers: Handlers) {
 
   return (
     <section data-testid="reviews" className="space-y-4">
-      <h2 className="font-semibold">Разборы</h2>
+      <h2 className="font-semibold">Анализ</h2>
       <p className="text-xs text-neutral-500">То, что стоит запомнить на будущее — не дневник и не отчёт о дне.</p>
 
       {!!candidates?.length && (
@@ -128,12 +128,12 @@ export function ReviewsPanel(handlers: Handlers) {
               <p>{c.text}</p>
               <details data-testid="pattern-evidence">
                 {/* M-C fix: count distinct reviews, not raw findings — sibling findings from the same
-                    Review are not "different разборы" and would otherwise inflate this number. */}
+                    Review are not "different анализы" and would otherwise inflate this number. */}
                 <summary className="cursor-pointer text-xs text-neutral-500">
                   Уже {c.supportingFindings.length} {pluralize(c.supportingFindings.length, "раз", "раза", "раз")} (
                   {(() => {
                     const n = new Set(c.supportingFindings.map((f) => f.reviewId)).size;
-                    return `${n} разных ${pluralize(n, "разбор", "разбора", "разборов")}`;
+                    return `${n} разных ${pluralize(n, "анализа", "анализа", "анализов")}`;
                   })()}) — на чём это основано
                 </summary>
                 <ul className="mt-1 space-y-1">
@@ -212,7 +212,7 @@ export function ReviewsPanel(handlers: Handlers) {
       )}
 
       <div data-testid="review-list" className="space-y-1">
-        {reviews?.length === 0 && <p className="text-neutral-500">Пока нет разборов.</p>}
+        {reviews?.length === 0 && <p className="text-neutral-500">Пока нет анализов.</p>}
         {reviews?.map((r) => (
           <div
             key={r.id}

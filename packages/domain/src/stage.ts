@@ -62,3 +62,25 @@ export function editStageTitle(stage: Stage, title: string, now: Instant): Domai
 export function isCurrentStageUnambiguous(stages: readonly Stage[]): boolean {
   return stages.filter((s) => s.isCurrent).length <= 1;
 }
+
+/**
+ * Moving a Stage that still has unfinished work above the current one is the owner saying «this comes first»: the first such Stage
+ * in the new order becomes current (so a reorder alone is never shadowed by a stale pointer). Any other reorder —
+ * Stages moved below the current one, or shuffled among themselves — leaves her current Stage alone.
+ * Returns the Stage to make current, or null for «no change». Pure: `before`/`after` are Stage ids in order.
+ */
+export function stageToFollowReorder(input: {
+  readonly before: readonly EntityId[];
+  readonly after: readonly EntityId[];
+  readonly currentId: EntityId | null;
+  /** Stages with no unfinished Action (finished or empty): nothing to come first, never followed. */
+  readonly withoutWork: ReadonlySet<EntityId>;
+}): EntityId | null {
+  if (input.currentId === null) return null;
+  const was = input.before.indexOf(input.currentId);
+  const now = input.after.indexOf(input.currentId);
+  if (was < 0 || now < 0) return null;
+  const previouslyAbove = new Set(input.before.slice(0, was));
+  const movedAbove = input.after.slice(0, now).filter((id) => !previouslyAbove.has(id) && !input.withoutWork.has(id));
+  return movedAbove[0] ?? null;
+}

@@ -107,6 +107,17 @@ export function replacePlanOrder(
   };
 }
 
+export const OWNER_ORDER_NOTE = "Порядок изменён владельцем вручную — он главнее прежнего порядка ИИ.";
+
+/**
+ * Rationale of a plan the owner has taken over (Stage 9 Day 1 hotfix): an AI's reasoning must not stay on
+ * screen as the reason for an order the owner changed — and must not be lost either, so it is kept after the note.
+ */
+export function ownerOrderRationale(previous: string): string {
+  if (previous.startsWith(OWNER_ORDER_NOTE)) return previous;
+  return `${OWNER_ORDER_NOTE} Прежнее обоснование: ${previous}`.slice(0, PLAN_RATIONALE_MAX);
+}
+
 /** Unfinished Actions the plan does not mention (e.g. added manually after the route was approved). */
 export function unplannedActionIds(
   plan: OrderedActionPlan | undefined,

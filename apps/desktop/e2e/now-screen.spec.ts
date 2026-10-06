@@ -124,7 +124,7 @@ test("Stage 4: Сейчас reflects real state — empty, needs-replan, selecte
   await expect(win.getByTestId("now-action")).toBeVisible();
   await expect(win.getByTestId("now-action")).toHaveAttribute("data-id", actions.a1);
   await expect(win.getByTestId("now-done-when")).toContainText("готово 1");
-  await expect(win.getByTestId("now-why")).toContainText("Первое действие в подтверждённом порядке.");
+  await expect(win.getByTestId("now-why")).toContainText("Первое невыполненное действие текущего этапа.");
   await expect(win.getByTestId("now-needs-replan")).toHaveCount(0);
 
   // 5. The strategic order is not shown by default, but can be expanded on demand.

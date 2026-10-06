@@ -212,15 +212,7 @@ export function ProposalsSection({
   );
 }
 
-export function PlanSection({
-  plan,
-  stages,
-  unplannedActionIds,
-}: {
-  plan: OrderedActionPlanDto | null;
-  stages: StageWithActionsDto[];
-  unplannedActionIds: string[];
-}) {
+export function PlanSection({ plan, stages }: { plan: OrderedActionPlanDto | null; stages: StageWithActionsDto[] }) {
   const actions = new Map(stages.flatMap((s) => s.actions).map((a) => [a.id, a]));
   return (
     <div data-testid="plan" className="space-y-2 border-t pt-3">
@@ -257,17 +249,9 @@ export function PlanSection({
           </details>
         </>
       )}
-      {unplannedActionIds.length > 0 && (
-        <p
-          data-testid="plan-unplanned"
-          className="rounded border border-amber-300 bg-amber-50 px-2 py-1 text-amber-900"
-        >
-          Не входят в порядок: {unplannedActionIds.map((id) => actions.get(id)?.title ?? "?").join(", ")}. Попроси ИИ
-          обновить порядок.
-        </p>
-      )}
       <p className="text-xs text-neutral-500">
-        Стрелки ↑↓ у действий меняют только порядок показа внутри этапа, а не порядок действий.
+        Это единственный порядок: «Сейчас» берёт первое невыполненное действие текущего этапа. Стрелки ↑↓ у действий и
+        этапов меняют его по-настоящему; ИИ может только предложить другой порядок — решаешь ты.
       </p>
     </div>
   );

@@ -161,7 +161,7 @@ test("Stage 8 main screen: the path up, the day's structure and the Executor tim
   await expect(win.getByTestId("now-project")).toHaveText("Проект «Запустить продукт»");
   await expect(win.getByTestId("now-stage")).toContainText("этап «Основа»");
   await expect(win.getByTestId("now-done-when")).toContainText("готово 1");
-  await expect(win.getByTestId("now-why")).toContainText("Первое действие в подтверждённом порядке.");
+  await expect(win.getByTestId("now-why")).toContainText("Первое невыполненное действие текущего этапа.");
   await expect(win.getByTestId("work")).toHaveAttribute("data-state", "idle");
   await expect(win.getByTestId("work-timer")).toHaveText("00:00");
   // Routines and calendar are not work time.
